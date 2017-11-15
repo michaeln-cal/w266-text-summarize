@@ -29,6 +29,7 @@ class SummarizationModel(object):
   """A class to represent a sequence-to-sequence model for text summarization. Supports both baseline mode, pointer-generator mode, and coverage"""
 
   def __init__(self,iterator, hps, vocab):
+    self.init_iter = iterator.initializer
     self._hps = hps
     self._enc_batch_extend_vocab = vocab
     self._vocab = vocab
@@ -159,7 +160,7 @@ class SummarizationModel(object):
 
     prev_coverage = self.prev_coverage if hps.mode=="decode" and hps.coverage else None # In decode mode, we run attention_decoder one step at a time and so need to pass in the previous step's coverage vector each time
 
-    outputs, out_state, attn_dists, p_gens, coverage = attention_decoder(inputs, self._dec_in_state, self._enc_states, self._enc_padding_mask, cell, initial_state_attention=(hps.mode=="decode"), pointer_gen=hps.pointer_gen, use_coverage=hps.coverage, prev_coverage=prev_coverage)
+    outputs, out_state, attn_dists, p_gens, coverage = attention_decoder(inputs, self._dec_in_state, self._enc_states, self._enc_padding_mask, cell, initial_state_attention=(hps.mode=="decode"), pointer_gen=hps.pointer_gen, use_coverage=hps.coverage, prev_coverage=prev_coverage, batch_size=hps.batch_size)
 
     return outputs, out_state, attn_dists, p_gens, coverage
 
@@ -343,6 +344,7 @@ class SummarizationModel(object):
     """Runs one training iteration. Returns a dictionary containing train op, summaries, loss, global_step and (optionally) coverage loss."""
     # self._make_feed_dict(iterator)
     to_return = {
+
         'train_op': self._train_op,
         'summaries': self._summaries,
         'loss': self._loss,

@@ -218,8 +218,8 @@ def get_iterator(dataset,
     #
     # # Add in sequence lengths.
     dataset = dataset.map(
-        lambda article, dec_input, dec_target: (article,tf.size(article), dec_input, dec_target,tf.ones([tf.size(article)],dtype=tf.int32),
-                                                tf.ones([tf.size(dec_target)], dtype=tf.int32),tf.size(dec_input)),
+        lambda article, dec_input, dec_target: (article,tf.size(article), dec_input, dec_target,tf.ones([tf.size(article)],dtype=tf.float32),
+                                                tf.ones([tf.size(dec_target)], dtype=tf.float32),tf.size(dec_input)),
         num_parallel_calls=num_threads)
     #
     # # Bucket by source sequence length (buckets for lengths 0-9, 10-19, ...)
@@ -245,9 +245,9 @@ def get_iterator(dataset,
                 0,
                 pad_token,  # tgt_input
                 pad_token,  # tgt_output
-                0,
+                0.0,
 
-                0,
+                0.0,
                 0))  # tgt_len -- unused
 
     # if num_buckets > 1:

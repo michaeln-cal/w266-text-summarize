@@ -93,7 +93,7 @@ tf.app.flags.DEFINE_float('trunc_norm_init_std', 1e-4, 'std of trunc norm init, 
 tf.app.flags.DEFINE_float('max_grad_norm', 2.0, 'for gradient clipping')
 
 # Pointer-generator or baseline model
-tf.app.flags.DEFINE_boolean('pointer_gen', True, 'If True, use pointer-generator model. If False, use baseline model.')
+tf.app.flags.DEFINE_boolean('pointer_gen', False, 'If True, use pointer-generator model. If False, use baseline model.')
 
 # Coverage hyperparameters
 tf.app.flags.DEFINE_boolean('coverage', False, 'Use coverage mechanism. Note, the experiments reported in the ACL paper train WITHOUT coverage until converged, and then train for a short phase WITH coverage afterwards. i.e. to reproduce the results in the ACL paper, turn this off for most of training then turn on for a short phase at the end.')
@@ -265,7 +265,9 @@ def setup_training(model):
 def run_training(model, sess_context_manager, sv, summary_writer):
   """Repeatedly runs training iterations, logging loss to screen and writing summaries"""
   tf.logging.info("starting run_training")
+
   with sess_context_manager as sess:
+    sess.run([model.init_iter])
     if FLAGS.debug: # start the tensorflow debugger
       sess = tf_debug.LocalCLIDebugWrapperSession(sess)
       sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
@@ -401,9 +403,9 @@ def main(unused_argv):
     iterator = data.get_iterator(train_dataset, vocab_table, hps)
     init = iterator.initializer
 
-    with tf.Session() as sess:
-      sess.run(tf.tables_initializer())
-      sess.run([init])
+    # with tf.Session() as sess:
+    #   sess.run(tf.tables_initializer())
+    #   sess.run([init])
 
     model = SummarizationModel(iterator,hps, vocab)
     setup_training(model)
