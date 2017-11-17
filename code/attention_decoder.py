@@ -135,7 +135,6 @@ def attention_decoder(decoder_inputs, initial_state, encoder_states, enc_padding
     p_gens = []
     state = initial_state
     coverage = prev_coverage # initialize coverage to None or whatever was passed in
-    print("batch size is",batch_size)
     context_vector = array_ops.zeros([batch_size, attn_size])
     context_vector.set_shape([None, attn_size])  # Ensure the second shape of attention vectors is set.
     if initial_state_attention: # true in decode mode

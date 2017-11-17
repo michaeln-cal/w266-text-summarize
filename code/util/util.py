@@ -40,3 +40,4 @@ def load_ckpt(saver, sess, ckpt_dir="train"):
     except:
       tf.logging.info("Failed to load checkpoint from %s. Sleeping for %i secs...", ckpt_dir, 10)
       time.sleep(10)
+

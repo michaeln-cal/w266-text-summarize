@@ -23,7 +23,7 @@ import beam_search
 import util.data
 import json
 import pyrouge
-import util
+import util.util as util
 import logging
 import numpy as np
 
@@ -79,7 +79,6 @@ class BeamSearchDecoder(object):
     t0 = time.time()
     counter = 0
     while True:
-      batch = self._iterator  # 1 example repeated across batch
       if batch is None: # finished decoding dataset in single_pass mode
         assert FLAGS.single_pass, "Dataset exhausted, but we are not in single_pass mode"
         tf.logging.info("Decoder has finished reading dataset for single_pass.")

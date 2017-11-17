@@ -22,17 +22,23 @@ import numpy as np
 import tensorflow as tf
 from attention_decoder import attention_decoder
 from tensorflow.contrib.tensorboard.plugins import projector
+from tensorflow.python.layers import core as layers_core
+
+import util.data as data
 
 FLAGS = tf.app.flags.FLAGS
-
+START_DECODING = '[START]' # This has a vocab id, which is used at the start of every decoder input sequence
+STOP_DECODING = '[STOP]' # This has a vocab id, which is used at the end of untruncated target sequences
 class SummarizationModel(object):
   """A class to represent a sequence-to-sequence model for text summarization. Supports both baseline mode, pointer-generator mode, and coverage"""
 
-  def __init__(self,iterator, hps, vocab):
+  def __init__(self,iterator, hps, vocab, vocab_table=None):
     self.init_iter = iterator.initializer
     self._hps = hps
     self._enc_batch_extend_vocab = vocab
     self._vocab = vocab
+    self._vocab_table = vocab_table
+    self.iterator = iterator
 
     self._enc_batch = iterator.article[0]
     print("enc batch input shape is", self._enc_batch.get_shape()[1].value)
@@ -45,6 +51,10 @@ class SummarizationModel(object):
 
     self._target_batch = iterator.dec_target
     self._dec_padding_mask = iterator.dec_mask
+    # self._output_layer = layers_core.Dense(
+    #     self._vocab[1], use_bias=False, name="output_projection")
+    self.start_decoding = tf.cast(self._vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
+    self.stop_decoding = tf.cast(self._vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
 
   def _add_placeholders(self):
     """Add placeholders to the graph. These are entry points for any input data."""
@@ -164,44 +174,6 @@ class SummarizationModel(object):
 
     return outputs, out_state, attn_dists, p_gens, coverage
 
-  def _calc_final_dist(self, vocab_dists, attn_dists):
-    """Calculate the final distribution, for the pointer-generator model
-
-    Args:
-      vocab_dists: The vocabulary distributions. List length max_dec_steps of (batch_size, vsize) arrays. The words are in the order they appear in the vocabulary file.
-      attn_dists: The attention distributions. List length max_dec_steps of (batch_size, attn_len) arrays
-
-    Returns:
-      final_dists: The final distributions. List length max_dec_steps of (batch_size, extended_vsize) arrays.
-    """
-    with tf.variable_scope('final_distribution'):
-      # Multiply vocab dists by p_gen and attention dists by (1-p_gen)
-      vocab_dists = [p_gen * dist for (p_gen,dist) in zip(self.p_gens, vocab_dists)]
-      attn_dists = [(1-p_gen) * dist for (p_gen,dist) in zip(self.p_gens, attn_dists)]
-
-      # Concatenate some zeros to each vocabulary dist, to hold the probabilities for in-article OOV words
-      extended_vsize = self._vocab[1] + self._max_art_oovs # the maximum (over the batch) size of the extended vocabulary
-      extra_zeros = tf.zeros((self._hps.batch_size, self._max_art_oovs))
-      vocab_dists_extended = [tf.concat(axis=1, values=[dist, extra_zeros]) for dist in vocab_dists] # list length max_dec_steps of shape (batch_size, extended_vsize)
-
-      # Project the values in the attention distributions onto the appropriate entries in the final distributions
-      # This means that if a_i = 0.1 and the ith encoder word is w, and w has index 500 in the vocabulary, then we add 0.1 onto the 500th entry of the final distribution
-      # This is done for each decoder timestep.
-      # This is fiddly; we use tf.scatter_nd to do the projection
-      batch_nums = tf.range(0, limit=self._hps.batch_size) # shape (batch_size)
-      batch_nums = tf.expand_dims(batch_nums, 1) # shape (batch_size, 1)
-      attn_len = tf.shape(self._enc_batch_extend_vocab)[1] # number of states we attend over
-      batch_nums = tf.tile(batch_nums, [1, attn_len]) # shape (batch_size, attn_len)
-      indices = tf.stack( (batch_nums, self._enc_batch_extend_vocab), axis=2) # shape (batch_size, enc_t, 2)
-      shape = [self._hps.batch_size, extended_vsize]
-      attn_dists_projected = [tf.scatter_nd(indices, copy_dist, shape) for copy_dist in attn_dists] # list length max_dec_steps (batch_size, extended_vsize)
-
-      # Add the vocab distributions and the copy distributions together to get the final distributions
-      # final_dists is a list length max_dec_steps; each entry is a tensor shape (batch_size, extended_vsize) giving the final distribution for that decoder timestep
-      # Note that for decoder timesteps and examples corresponding to a [PAD] token, this is junk - ignore.
-      final_dists = [vocab_dist + copy_dist for (vocab_dist,copy_dist) in zip(vocab_dists_extended, attn_dists_projected)]
-
-      return final_dists
 
   def _add_emb_vis(self, embedding_var):
     """Do setup so that we can view word embedding visualization in Tensorboard, as described here:
@@ -259,12 +231,7 @@ class SummarizationModel(object):
         vocab_dists = [tf.nn.softmax(s) for s in vocab_scores] # The vocabulary distributions. List length max_dec_steps of (batch_size, vsize) arrays. The words are in the order they appear in the vocabulary file.
 
 
-      # For pointer-generator model, calc final distribution from copy distribution and vocabulary distribution
-      if FLAGS.pointer_gen:
-        final_dists = self._calc_final_dist(vocab_dists, self.attn_dists)
-      else: # final distribution is just vocabulary distribution
-        final_dists = vocab_dists
-
+      final_dists = vocab_dists
 
 
       if hps.mode in ['train', 'eval']:
@@ -304,6 +271,38 @@ class SummarizationModel(object):
       final_dists = final_dists[0]
       topk_probs, self._topk_ids = tf.nn.top_k(final_dists, hps.batch_size*2) # take the k largest probs. note batch_size=beam_size in decode mode
       self._topk_log_probs = tf.log(topk_probs)
+      # length_penalty_weight = hparams.length_penalty_weight
+      #
+      # start_decoding = tf.cast(self._vocab.lookup(tf.constant(START_DECODING)), tf.int32)
+      # stop_decoding = tf.cast(self._vocab.lookup(tf.constant(STOP_DECODING)), tf.int32)
+      # beam_size = len(self._dec_in_state)
+      # cell = tf.contrib.rnn.LSTMCell(self._hps.hidden_dim, initializer=self.rand_unif_init, state_is_tuple=True)
+      # my_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
+      #   cell=cell,
+      #   embedding=embedding,
+      #   start_tokens=start_decoding,
+      #   end_token=stop_decoding,
+      #   initial_state=self._dec_in_state,
+      #   beam_width=beam_size,
+      #   output_layer=self._output_layer,
+      #   length_penalty_weight=0.0)
+      #
+      #
+      # # Dynamic decoding
+      # outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
+      #     my_decoder,
+      #     maximum_iterations=maximum_iterations,
+      #     output_time_major=self.time_major,
+      #     swap_memory=True,
+      #     scope=decoder_scope)
+      #
+      # if beam_width > 0:
+      #   logits = tf.no_op()
+      #   sample_id = outputs.predicted_ids
+      # else:
+      #   logits = outputs.rnn_output
+      #   sample_id = outputs.sample_id
+      #
 
 
   def _add_train_op(self):
@@ -387,7 +386,7 @@ class SummarizationModel(object):
     return enc_states, dec_in_state
 
 
-  def decode_onestep(self, sess, iterator, latest_tokens, enc_states, dec_init_states, prev_coverage):
+  def decode_onestep(self, sess, latest_tokens, enc_states, dec_init_states, prev_coverage):
     """For beam search decoding. Run the decoder for one step.
 
     Args:
@@ -409,7 +408,7 @@ class SummarizationModel(object):
     """
 
     beam_size = len(dec_init_states)
-
+    print("beam size is", beam_size)
     # Turn dec_init_states (a list of LSTMStateTuples) into a single LSTMStateTuple for the batch
     cells = [np.expand_dims(state.c, axis=0) for state in dec_init_states]
     hiddens = [np.expand_dims(state.h, axis=0) for state in dec_init_states]
@@ -417,7 +416,6 @@ class SummarizationModel(object):
     new_h = np.concatenate(hiddens, axis=0)  # shape [batch_size,hidden_dim]
     new_dec_in_state = tf.contrib.rnn.LSTMStateTuple(new_c, new_h)
 
-    feed = {  }
 
     to_return = {
       "ids": self._topk_ids,
@@ -431,11 +429,15 @@ class SummarizationModel(object):
     #   feed[self._max_art_oovs] = batch.max_art_oovs
     #   to_return['p_gens'] = self.p_gens
 
-    if self._hps.coverage:
-      feed[self.prev_coverage] = np.stack(prev_coverage, axis=0)
-      to_return['coverage'] = self.coverage
-
-    results = sess.run(to_return) # run the decoder step
+    # if self._hps.coverage:
+    #   feed[self.prev_coverage] = np.stack(prev_coverage, axis=0)
+    #   to_return['coverage'] = self.coverage
+    try:
+        results = sess.run(to_return) # run the decoder step
+    except tf.errors.OutOfRangeError:
+        print("Next decoding step")
+        sess.run([self.init_iter])
+        results = sess.run(to_return)  # run the decoder step
 
     # Convert results['states'] (a single LSTMStateTuple) into a list of LSTMStateTuple -- one for each hypothesis
     new_states = [tf.contrib.rnn.LSTMStateTuple(results['states'].c[i, :], results['states'].h[i, :]) for i in range(beam_size)]
@@ -444,12 +446,12 @@ class SummarizationModel(object):
     assert len(results['attn_dists'])==1
     attn_dists = results['attn_dists'][0].tolist()
 
-    if FLAGS.pointer_gen:
-      # Convert singleton list containing a tensor to a list of k arrays
-      assert len(results['p_gens'])==1
-      p_gens = results['p_gens'][0].tolist()
-    else:
-      p_gens = [None for _ in range(beam_size)]
+    # if FLAGS.pointer_gen:
+    #   # Convert singleton list containing a tensor to a list of k arrays
+    #   assert len(results['p_gens'])==1
+    #   p_gens = results['p_gens'][0].tolist()
+    # else:
+    p_gens = [None for _ in range(beam_size)]
 
     # Convert the coverage tensor to a list length k containing the coverage vector for each hypothesis
     if FLAGS.coverage:
@@ -496,3 +498,6 @@ def _coverage_loss(attn_dists, padding_mask):
     coverage += a # update the coverage vector
   coverage_loss = _mask_and_avg(covlosses, padding_mask)
   return coverage_loss
+
+
+

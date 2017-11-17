@@ -81,43 +81,6 @@ STOP_DECODING = '[STOP]' # This has a vocab id, which is used at the end of untr
 
 UNK_ID = 0
 
-# def check_vocab(vocab_file, out_dir, check_special_token=True, pad=None,
-#                  unk=None, start_de=None, stop_de=None):
-#   """Check if vocab_file doesn't exist, create from corpus_file."""
-#   if tf.gfile.Exists(vocab_file):
-#     utils.print_out("# Vocab file %s exists" % vocab_file)
-#     vocab = []
-#     with codecs.getreader("utf-8")(tf.gfile.GFile(vocab_file, "rb")) as f:
-#       vocab_size = 0
-#       for word in f:
-#         vocab_size += 1
-#         vocab.append(word.strip())
-#     if check_special_token:
-#       # Verify if the vocab starts with unk, sos, eos
-#       # If not, prepend those tokens & generate a new vocab file
-#       if not unk: unk = UNKNOWN_TOKEN
-#       if not pad: pad = PAD_TOKEN
-#       if not start_de: start_de=START_DECODING
-#       if not stop_de: stop_de=STOP_DECODING
-#       assert len(vocab) >= 4
-#       if vocab[0] != unk or vocab[1] != pad or vocab[2] != start_de or vocab[3!=stop_de]:
-#         utils.print_out("The first 4 vocab words [%s, %s, %s,%s]"
-#                         " are not [%s, %s, %s, %s]" %
-#                         (vocab[0], vocab[1], vocab[2], vocab[3], unk, pad, start_de, stop_de))
-#         vocab = [unk, pad, start_de, stop_de] + vocab
-#         vocab_size += 4
-#         new_vocab_file = os.path.join(out_dir, os.path.basename(vocab_file))
-#         with codecs.getwriter("utf-8")(
-#             tf.gfile.GFile(new_vocab_file, "wb")) as f:
-#           for word in vocab:
-#             f.write("%s\n" % word)
-#         vocab_file = new_vocab_file
-#   else:
-#     raise ValueError("vocab_file '%s' does not exist." % vocab_file)
-#
-#   vocab_size = len(vocab)
-#   return vocab_size, vocab_file
-#
 
 def create_vocab_tables(vocab_file, max_size):
   """Creates vocab tables for src_vocab_file and tgt_vocab_file."""
@@ -135,7 +98,6 @@ def create_vocab_tables(vocab_file, max_size):
   vocab = np.unique(np.array(vocab))
   vocab_table = lookup_ops.index_table_from_tensor(
       tf.convert_to_tensor(vocab), default_value=UNK_ID)
-
   return vocab_table
 
 
@@ -153,6 +115,16 @@ def create_vocab_tables(vocab_file, max_size):
   #     writer = csv.DictWriter(f, delimiter="\t", fieldnames=fieldnames)
   #     for i in xrange(self.size()):
   #       writer.writerow({"word": self._id_to_word[i]})
+
+
+vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
+
+vocab_table = create_vocab_tables(vocab_file, 50000)
+
+start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
+stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
+unk_token = tf.cast(vocab_table.lookup(tf.constant(UNKNOWN_TOKEN)), tf.int32)
+
 
 def get_iterator(dataset,
                  vocab_table,

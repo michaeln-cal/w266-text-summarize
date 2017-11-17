@@ -11,56 +11,10 @@ from tensorflow.python import debug as tf_debug
 
 import util.data as data
 import util.util as util
-from util.decode import BeamSearchDecoder
+from inference import BeamSearchDecoder
 from util.model import SummarizationModel
 
-# # vara = tf.get_variable("vara", shape =[3,5], initializer=tf.initializers.zeros)
-# # vara = tf.sequence_mask([1, 3, 2], 5, dtype=tf.int64)
-# # init = tf.global_variables_initializer()
-# # with tf.Session() as sess:
-# #     init.run()
-# #     a = vara.eval()
-# # print(a)
-# #
-# t = tf.random_normal(tf.shape([2,3]))
-#
-# dataset1 = tf.data.Dataset.range(0,20)
-# dataset2 = tf.data.Dataset.range(20,40)
-# dataset = tf.data.Dataset.zip((dataset1, dataset2))
-# it = dataset.make_one_shot_iterator()
-# x_it = it.get_next()
-# batch_input = tf.data.Dataset.padded_batch(dataset,batch_size=5,padded_shapes =(tf.TensorShape([]),tf.TensorShape([])))
-#
-# iter = batch_input.make_one_shot_iterator()
-# # iter.initializer()
-# (a,b) = iter.get_next()
-# iter_val = iter.get_next()
-#
-# # init = tf.global_variables_initializer()
-#
-# with tf.Session() as sess:
-#     # init.run()
-#     for i in range(1,3):
-#         (x,y,d)=sess.run([a,b, x_it])
-#         # y=sess.run(b)
-#
-#         it = sess.run(iter_val)
-#         # y =b.eval()
-#         print(x,y)
-#         print(it)
-#         print(d)
-#
-#
-#
-# reader = open('/Users/giang/train_127.bin', 'rb')
-# len_bytes = reader.read(8)
-# print('len byte is:', len_bytes)
-# str_len = struct.unpack('q', len_bytes)[0]
-# print(str_len)
-# example_str = struct.unpack('%ds' % str_len, reader.read(str_len))[0]
-# ex = example_pb2.Example.FromString(example_str)
-# print(ex)
-# print(example_str)
+
 
 
 FLAGS = tf.app.flags.FLAGS
@@ -111,18 +65,10 @@ tf.app.flags.DEFINE_boolean('debug', False, "Run in tensorflow's debug mode (wat
 
 
 
-#
-# hps_dict = {}
-
-# for key, val in FLAGS.__flags.items():  # for each flag
-#     print(key, val)
-#
-#     if key in hparam_list:  # if it's in the list
-#         hps_dict[key] = val  # add it to the dict
-# hps = namedtuple("HParams", hps_dict.keys())(**hps_dict)
-# print("batch size is:", hps.batch_size)
 train_filenames = []
 test_filenames =[]
+val_filenames =[]
+
 dir = "/Users/giang/Downloads/finished_files/chunked"
 
 for file in os.listdir(dir):
@@ -133,6 +79,10 @@ for file in os.listdir(dir):
     if file.startswith("test_"):
         test_filenames.append(dir+"/"+file)
 
+
+for file in os.listdir(dir):
+    if file.startswith("val_"):
+        val_filenames.append(dir+"/"+file)
 
 
 
@@ -275,7 +225,18 @@ def run_training(model, sess_context_manager, sv, summary_writer):
 
       tf.logging.info('running training step...')
       t0=time.time()
-      results = model.run_train_step(sess)
+      try:
+        results = model.run_train_step(sess)
+        summaries = results['summaries']  # we will write these summaries to tensorboard using summary_writer
+        train_step = results['global_step']  # we need this to update our running average loss
+      except tf.errors.OutOfRangeError:
+        # Finished going through the training dataset.  Go to next epoch.
+        epoch_step =+1
+        print(
+          "# Finished epoch: ",epoch_step, "step %d. Perform external evaluation" %train_step)
+        sess.run([model.init_iter])
+        continue
+
       t1=time.time()
       tf.logging.info('seconds for training step: %.3f', t1-t0)
 
@@ -290,8 +251,7 @@ def run_training(model, sess_context_manager, sv, summary_writer):
         tf.logging.info("coverage_loss: %f", coverage_loss) # print the coverage loss to screen
 
       # get the summaries and iteration number so we can write summaries to tensorboard
-      summaries = results['summaries'] # we will write these summaries to tensorboard using summary_writer
-      train_step = results['global_step'] # we need this to update our running average loss
+
 
       summary_writer.add_summary(summaries, train_step) # write the summaries
       if train_step % 100 == 0: # flush the summary writer every so often
@@ -391,21 +351,27 @@ def main(unused_argv):
   test_dataset = tf.data.TextLineDataset.from_tensor_slices(test_filenames)
   test_dataset = test_dataset.map(lambda filename: tf.py_func(read_file, [filename], [tf.string, tf.string]))
 
+  val_dataset = tf.data.TextLineDataset.from_tensor_slices(test_filenames)
+  val_dataset = val_dataset.map(lambda filename: tf.py_func(read_file, [filename], [tf.string, tf.string]))
+
+
 
   # it = dataset.make_one_shot_iterator()
   # x_it = it.get_next()
   vocab_table = data.create_vocab_tables(vocab_file, 50000)
+
+  start_decoding = tf.cast(vocab_table.lookup(tf.constant(data.START_DECODING)), tf.int32)
+  stop_decoding = tf.cast(vocab_table.lookup(tf.constant(data.STOP_DECODING)), tf.int32)
+  unk_token = tf.cast(vocab_table.lookup(tf.constant(data.UNKNOWN_TOKEN)), tf.int32)
 
   tf.set_random_seed(111) # a seed value for randomness
 
   if hps.mode == 'train':
     print("creating model...")
     iterator = data.get_iterator(train_dataset, vocab_table, hps)
-    init = iterator.initializer
+    # init = iterator.initializer
 
-    # with tf.Session() as sess:
-    #   sess.run(tf.tables_initializer())
-    #   sess.run([init])
+
 
     model = SummarizationModel(iterator,hps, vocab)
     setup_training(model)
@@ -420,16 +386,17 @@ def main(unused_argv):
     model = SummarizationModel(hps, vocab)
     run_eval(model, iterator, vocab)
   elif hps.mode == 'decode':
-    iterator = data.get_iterator(test_dataset, vocab_table, hps)
-    init = iterator.initializer
-
-    with tf.Session() as sess:
-      sess.run(tf.tables_initializer())
-      sess.run([init])
     decode_model_hps = hps  # This will be the hyperparameters for the decoder model
     decode_model_hps = hps._replace(max_dec_steps=1) # The model is configured with max_dec_steps=1 because we only ever run one step of the decoder at a time (to do beam search). Note that the batcher is initialized with max_dec_steps equal to e.g. 100 because the batches need to contain the full summaries
-    model = SummarizationModel(decode_model_hps, vocab)
-    decoder = BeamSearchDecoder(model, iterator, vocab)
+
+    iterator = data.get_iterator(val_dataset, vocab_table, decode_model_hps)
+    # init = iterator.initializer
+
+    # with tf.Session() as sess:
+    #   sess.run(tf.tables_initializer())
+    #   sess.run([init])
+    model = SummarizationModel(iterator,decode_model_hps, vocab, vocab_table)
+    decoder = BeamSearchDecoder(model, vocab,vocab_table)
     decoder.decode() # decode indefinitely (unless single_pass=True, in which case deocde the dataset exactly once)
   else:
     raise ValueError("The 'mode' flag must be one of train/eval/decode")
