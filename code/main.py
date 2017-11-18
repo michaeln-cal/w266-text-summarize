@@ -6,14 +6,13 @@ import os
 import struct
 import tensorflow as tf
 from collections import namedtuple
-# from inference import BeamSearchDecoder
 from tensorflow.core.example import example_pb2
 from tensorflow.python import debug as tf_debug
 
 import data
 import misc_utils as utils
+from model import SummarizationModel
 import util
-
 FLAGS = tf.app.flags.FLAGS
 
 # Where to find data
@@ -375,9 +374,6 @@ def main(unused_argv):
   reverse_vocab_table = data.create_id_tables(vocab_file, hps.vocab_size)
 
 
-  start_decoding = tf.cast(vocab_table.lookup(tf.constant(data.START_DECODING)), tf.int32)
-  stop_decoding = tf.cast(vocab_table.lookup(tf.constant(data.STOP_DECODING)), tf.int32)
-  unk_token = tf.cast(vocab_table.lookup(tf.constant(data.UNKNOWN_TOKEN)), tf.int32)
 
   tf.set_random_seed(111) # a seed value for randomness
 
