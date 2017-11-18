@@ -7,11 +7,11 @@ import struct
 import tensorflow as tf
 from collections import namedtuple
 # from inference import BeamSearchDecoder
-from model import SummarizationModel
 from tensorflow.core.example import example_pb2
 from tensorflow.python import debug as tf_debug
 
 import data
+import misc_utils as utils
 import util
 
 FLAGS = tf.app.flags.FLAGS
@@ -48,7 +48,7 @@ tf.app.flags.DEFINE_integer('emb_dim', 128, 'dimension of word embeddings')
 tf.app.flags.DEFINE_integer('batch_size', 16, 'minibatch size')
 tf.app.flags.DEFINE_integer('max_enc_steps', 400, 'max timesteps of encoder (max source text tokens)')
 tf.app.flags.DEFINE_integer('max_dec_steps', 100, 'max timesteps of decoder (max summary tokens)')
-tf.app.flags.DEFINE_integer('beam_size', 4, 'beam size for beam search decoding.')
+tf.app.flags.DEFINE_integer('beam_size', 6, 'beam size for beam search decoding.')
 tf.app.flags.DEFINE_integer('min_dec_steps', 35, 'Minimum sequence length of generated summary. Applies only for beam search decoding mode')
 tf.app.flags.DEFINE_integer('vocab_size', 50000, 'Size of vocabulary. These will be read from the vocabulary file in order. If the vocabulary file contains fewer words than this number, or if this number is set to 0, will take all words in the vocabulary file.')
 tf.app.flags.DEFINE_integer('warmup_steps', 1, 'warm up step ')
@@ -345,11 +345,9 @@ def main(unused_argv):
     FLAGS.batch_size = FLAGS.beam_size
 
   # If single_pass=True, check we're in decode mode
-  if FLAGS.single_pass and FLAGS.mode!='decode':
-    raise Exception("The single_pass flag should only be True in decode mode")
+
 
   # Make a namedtuple hps, containing the values of the hyperparameters that the model needs
-  hparam_list = ['mode', 'lr', 'adagrad_init_acc', 'rand_unif_init_mag', 'trunc_norm_init_std', 'max_grad_norm', 'hidden_dim', 'emb_dim', 'batch_size', 'max_dec_steps', 'max_enc_steps', 'coverage', 'cov_loss_wt', 'pointer_gen']
   hps_dict = {}
   for key,val in FLAGS.__flags.items(): # for each flag
     # if key in hparam_list: # if it's in the list
@@ -392,16 +390,7 @@ def main(unused_argv):
 
     model = SummarizationModel(iterator,hps,hps.mode,vocab_table,reverse_vocab_table)
     setup_training(hps,model)
-  elif hps.mode == 'eval':
-    iterator = data.get_iterator(test_dataset, vocab_table, hps)
-    init = iterator.initializer
 
-    with tf.Session() as sess:
-      sess.run(tf.tables_initializer())
-      sess.run([init])
-
-    model = SummarizationModel(iterator,hps,mode,vocab_table,reverse_vocab_table)
-    run_eval(model, iterator, vocab)
   elif hps.mode == 'decode':
     train_dir = os.path.join(FLAGS.log_root, "train")
 
@@ -419,11 +408,49 @@ def main(unused_argv):
     sess.run(tf.tables_initializer())
 
     sess.run([model.init_iter])
+    start_time = time.time()
+    num_sentences = 0
+    num_translations_per_input=1
+    while True:
+      try:
+        nmt_outputs, _ = model.decode(sess)
 
-    result = model.decode(sess) # decode indefinitely (unless single_pass=True, in which case deocde the dataset exactly once)
-    print(result)
+        batch_size = nmt_outputs.shape[1]
+        num_sentences += batch_size
+
+        for sent_id in range(batch_size):
+          for beam_id in range(num_translations_per_input):
+            translation = get_translation(
+              nmt_outputs[beam_id],
+              sent_id,
+              tgt_eos=hps.STOP_DECODING,
+              subword_option="bpe")
+            print((translation + b"\n").decode("utf-8"))
+      except tf.errors.OutOfRangeError:
+        utils.print_time(
+          "  done, num sentences %d, num translations per input %d" %
+          (num_sentences, num_translations_per_input), start_time)
+        break
+
   else:
     raise ValueError("The 'mode' flag must be one of train/eval/decode")
+def get_translation(nmt_outputs, sent_id, tgt_eos, subword_option):
+  """Given batch decoding outputs, select a sentence and turn to text."""
+  if tgt_eos: tgt_eos = tgt_eos.encode("utf-8")
+  # Select a sentence
+  output = nmt_outputs[sent_id, :].tolist()
 
+  # If there is an eos symbol in outputs, cut them at that point.
+  if tgt_eos and tgt_eos in output:
+    output = output[:output.index(tgt_eos)]
+
+  if subword_option == "bpe":  # BPE
+    translation = utils.format_bpe_text(output)
+  elif subword_option == "spm":  # SPM
+    translation = utils.format_spm_text(output)
+  else:
+    translation = utils.format_text(output)
+
+  return translation
 if __name__ == '__main__':
   tf.app.run()
