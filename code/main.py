@@ -1,6 +1,6 @@
 
 import time
-
+import datetime
 import numpy as np
 import os
 import struct
@@ -13,11 +13,13 @@ import data
 import misc_utils as utils
 from model import SummarizationModel
 import util
+import util.util as util
 FLAGS = tf.app.flags.FLAGS
 
 # Where to find data
-tf.app.flags.DEFINE_string('data_path', '', 'Path expression to tf.Example datafiles. Can include wildcards to access multiple datafiles.')
-tf.app.flags.DEFINE_string('vocab_path', '', 'Path expression to text vocabulary file.')
+
+tf.app.flags.DEFINE_string('data_path', '../data/cnn-dailymail/finished_files/chunked', 'Path expression to tf.Example datafiles. Can include wildcards to access multiple datafiles.')
+tf.app.flags.DEFINE_string('vocab_path', '../data/cnn-dailymail/finished_files/vocab', 'Path expression to text vocabulary file.')
 
 # Important settings
 tf.app.flags.DEFINE_string('mode', 'train', 'must be one of train/eval/decode')
@@ -32,7 +34,8 @@ tf.app.flags.DEFINE_string('optimizer', 'sgd', 'SGD.')
 tf.app.flags.DEFINE_string('unit_type', 'lstm', 'start of sentence')
 
 
-tf.app.flags.DEFINE_string('exp_name', '', 'Name for experiment. Logs will be saved in a directory with this name, under log_root.')
+tstamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+tf.app.flags.DEFINE_string('exp_name', 'exp_'+tstamp, 'Name for experiment. Logs will be saved in a directory with this name, under log_root.')
 
 # Hyperparameters
 tf.app.flags.DEFINE_integer('hidden_dim', 256, 'dimension of RNN hidden states')
@@ -117,7 +120,8 @@ train_filenames = []
 test_filenames =[]
 val_filenames =[]
 
-dir = "/Users/giang/Downloads/finished_files/chunked"
+#dir = "/Users/giang/Downloads/finished_files/chunked"
+dir = FLAGS.data_path
 
 for file in os.listdir(dir):
     if file.startswith("train_"):
@@ -133,8 +137,8 @@ for file in os.listdir(dir):
         val_filenames.append(dir+"/"+file)
 
 
-
-vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
+#vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
+vocab_file = FLAGS.vocab_path
 
 # filename =['/Users/giang/train_127.bin']
 # filename2 ='/Users/giang/a.story'
@@ -269,10 +273,13 @@ def run_training(model, sess_context_manager,train_dir):
     if FLAGS.debug: # start the tensorflow debugger
       sess = tf_debug.LocalCLIDebugWrapperSession(sess)
       sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
+
+    t0=time.time()
+    epoch_step = 1
     while True: # repeats until interrupted
 
-      tf.logging.info('running training step...')
-      t0=time.time()
+      tf.logging.debug('running training step...')
+      t1=time.time()
       try:
         results = model.train(sess)
         # return sess.run([self.update,
@@ -286,17 +293,15 @@ def run_training(model, sess_context_manager,train_dir):
         train_step = results[4]  # we need this to update our running average loss
       except tf.errors.OutOfRangeError:
         # Finished going through the training dataset.  Go to next epoch.
-        epoch_step =+1
+        epoch_step += 1
         print(
           "# Finished epoch: ",epoch_step, "step %d. Perform external evaluation" %train_step)
         sess.run([model.init_iter])
         continue
 
-      t1=time.time()
-      tf.logging.info('seconds for training step: %.3f', t1-t0)
-
+      t2=time.time()
       loss = results[1]
-      tf.logging.info('loss: %f', loss) # print the loss to screen
+      tf.logging.info('training: epoch:%2d; time elapsed:%8.2f (%+6.2f); loss: %f.2', epoch_step, t2-t0, t2-t1, loss)
 
       if not np.isfinite(loss):
         raise Exception("Loss is not finite. Stopping.")
