@@ -120,16 +120,15 @@ def create_id_tables(vocab_file, max_size):
       return vocab_table
 
 
-
-vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
-
-vocab_table = create_vocab_tables(vocab_file, 50000)
-vocab_index= create_id_tables(vocab_file,50000)
-
-
-start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
-stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
-unk_token = tf.cast(vocab_table.lookup(tf.constant(UNKNOWN_TOKEN)), tf.int32)
+# #vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
+# vocab_file = FLAGS.vocab_path
+#
+# vocab_table = create_vocab_tables(vocab_file, 50000)
+# vocab_index= create_id_tables(vocab_file,50000)
+#
+# start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
+# stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
+# unk_token = tf.cast(vocab_table.lookup(tf.constant(UNKNOWN_TOKEN)), tf.int32)
 
 
 def get_iterator(dataset,
