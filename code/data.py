@@ -65,8 +65,9 @@ from tensorflow.python.ops import lookup_ops
 
 class BatchedInput(
     collections.namedtuple("BatchedInput",
-                           ("initializer", "article", "dec_input",
-                            "dec_target","enc_mask","dec_mask"))):
+                           ("initializer", "source", "target_input",
+                            "target_output", "source_sequence_length",
+                            "target_sequence_length"))):
   pass
 
 # <s> and </s> are used in the data files to segment the abstracts into sentences. They don't receive vocab ids.
@@ -92,7 +93,7 @@ def create_vocab_tables(vocab_file, max_size):
           vocab.append(pieces[0])
           count+=1
           if(max_size>0 and count>=max_size):
-              print("max size of",max_size," exceeded stop")
+              # print("max size of",max_size," exceeded stop")
               break
 
   vocab = np.unique(np.array(vocab))
@@ -100,26 +101,31 @@ def create_vocab_tables(vocab_file, max_size):
       tf.convert_to_tensor(vocab), default_value=UNK_ID)
   return vocab_table
 
+def create_id_tables(vocab_file, max_size):
+      """Creates vocab tables for src_vocab_file and tgt_vocab_file."""
+      vocab = []
+      count = 0
+      with open(vocab_file, 'r') as vocab_f:
+          for line in vocab_f:
+              pieces = line.split()
+              vocab.append(pieces[0])
+              count += 1
+              if (max_size > 0 and count >= max_size):
+                  print("max size of", max_size, " exceeded stop")
+                  break
 
-  #
-  # def write_metadata(self, fpath):
-  #   """Writes metadata file for Tensorboard word embedding visualizer as described here:
-  #     https://www.tensorflow.org/get_started/embedding_viz
-  #
-  #   Args:
-  #     fpath: place to write the metadata file
-  #   """
-  #   print "Writing word embedding metadata file to %s..." % (fpath)
-  #   with open(fpath, "w") as f:
-  #     fieldnames = ['word']
-  #     writer = csv.DictWriter(f, delimiter="\t", fieldnames=fieldnames)
-  #     for i in xrange(self.size()):
-  #       writer.writerow({"word": self._id_to_word[i]})
+      vocab = np.unique(np.array(vocab))
+      vocab_table = lookup_ops.index_to_string_table_from_tensor(
+          tf.convert_to_tensor(vocab))
+      return vocab_table
+
 
 
 vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
 
 vocab_table = create_vocab_tables(vocab_file, 50000)
+vocab_index= create_id_tables(vocab_file,50000)
+
 
 start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
 stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
@@ -139,20 +145,7 @@ def get_iterator(dataset,
 
     start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
     stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
-    # pad_token = tf.cast(vocab_table.lookup(tf.constant(PAD_TOKEN)), tf.int32)
-    pad_token =0
-    # def process_art_abs(article, abstract_sentences):
-    #     # Process the article
-    #     article_words = article.split()
-    #     if len(article_words) > hps.max_enc_steps:
-    #       article_words = article_words[:hps.max_enc_steps]
-    #     enc_len = len(article_words) # store the length after truncation but before padding
-    #
-    #     # Process the abstract
-    #     abstract = ' '.join(abstract_sentences) # string
-    #     abstract_words = abstract.split() # list of strings
-    #     return article_words, enc_len, abstract_words
-    #
+
 
     dataset = dataset.shard(num_shards, shard_index)
 
@@ -164,37 +157,30 @@ def get_iterator(dataset,
         num_parallel_calls=num_threads)
 
     dataset = dataset.map(
-        lambda article, abstract: tf.cond(tf.size(abstract) >=tf.constant(hps.max_dec_steps),lambda :
-        (article[:hps.max_enc_steps], tf.concat(([tf.constant(START_DECODING)], abstract), 0)[:hps.max_dec_steps],abstract[:hps.max_dec_steps])
-                          ,lambda: (article[:hps.max_enc_steps], tf.concat(([tf.constant(START_DECODING)], abstract), 0),tf.concat((abstract,[tf.constant(START_DECODING)]),0))),num_parallel_calls=num_threads)
-
-    # dataset = dataset.map(
-    #     lambda article, abstract: (article,  abstract, abstract),
-    #     num_parallel_calls=num_threads)
-
-
-    # dataset = dataset.map(
-    #     lambda article, abstract: (article[:hps.max_enc_steps], tf.cond(tf.size(abstract) >=tf.constant(hps.max_dec_steps),(
-    #                       tf.concat(([tf.constant(START_DECODING)], abstract), 0)[:hps.max_dec_steps],abstract[:hps.max_dec_steps])
-    #                       ,(tf.concat(([tf.constant(START_DECODING)], abstract), 0),tf.concat((abstract,[tf.constant(START_DECODING)]),0)))),num_parallel_calls=num_threads)
-
-
-
-    # Convert the word strings to ids.  Word strings that are not in the
-    # vocab get the lookup table's default_value integer.
+            lambda src, tgt: (src[:hps.max_enc_steps], tgt),
+        num_parallel_calls=num_threads)
     dataset = dataset.map(
-        lambda article, dec_input, dec_target: (tf.cast(vocab_table.lookup(article), tf.int32),tf.cast(vocab_table.lookup(dec_input), tf.int32),
-                          tf.cast(vocab_table.lookup(dec_target), tf.int32)),
+            lambda src, tgt: (src, tgt[:hps.max_dec_steps]),
+        num_parallel_calls=num_threads)
+
+    dataset = dataset.map(
+        lambda src, tgt: (tf.cast(vocab_table.lookup(src), tf.int32),
+                          tf.cast(vocab_table.lookup(tgt), tf.int32)),
         num_parallel_calls=num_threads)
     # Create a tgt_input prefixed with <sos> and a tgt_output suffixed with <eos>.
     #
-    # # Add in sequence lengths.
+
+    # Create a tgt_input prefixed with <sos> and a tgt_output suffixed with <eos>.
     dataset = dataset.map(
-        lambda article, dec_input, dec_target: (article,tf.size(article), dec_input, dec_target,tf.ones([tf.size(article)],dtype=tf.float32),
-                                                tf.ones([tf.size(dec_target)], dtype=tf.float32),tf.size(dec_input)),
+        lambda src, tgt: (src,
+                          tf.concat(([start_decoding], tgt), 0),
+                          tf.concat((tgt, [stop_decoding]), 0)),
         num_parallel_calls=num_threads)
-    #
-    # # Bucket by source sequence length (buckets for lengths 0-9, 10-19, ...)
+    # Add in sequence lengths.
+    dataset = dataset.map(
+        lambda src, tgt_in, tgt_out: (src, tgt_in, tgt_out, tf.size(src), tf.size(tgt_in)),
+        num_parallel_calls=num_threads)
+
     def batching_func(x):
         return x.padded_batch(
             hps.batch_size,
@@ -202,62 +188,33 @@ def get_iterator(dataset,
             # these have unknown-length vectors.  The last two entries are
             # the source and target row sizes; these are scalars.
             padded_shapes=(
-                tf.TensorShape([hps.max_enc_steps]),  # article
-                tf.TensorShape([]),  # article_len
-
-                tf.TensorShape([hps.max_dec_steps]),  # dec_input
-                tf.TensorShape([hps.max_dec_steps]),  # dec_target
-                tf.TensorShape([hps.max_enc_steps]),  # mask for article
-                tf.TensorShape([hps.max_dec_steps]),  # mask for encoder
-                tf.TensorShape([])),  # dec_input_len  # Pad the source and target sequences with eos tokens.
+                tf.TensorShape([None]),  # src
+                tf.TensorShape([None]),  # tgt_input
+                tf.TensorShape([None]),  # tgt_output
+                tf.TensorShape([]),  # src_len
+                tf.TensorShape([])),  # tgt_len
+            # Pad the source and target sequences with eos tokens.
             # (Though notice we don't generally need to do this since
             # later on we will be masking out calculations past the true sequence.
             padding_values=(
-                pad_token,  # src
-                0,
-                pad_token,  # tgt_input
-                pad_token,  # tgt_output
-                0.0,
-
-                0.0,
+                stop_decoding,  # src
+                stop_decoding,  # tgt_input
+                stop_decoding,  # tgt_output
+                0,  # src_len -- unused
                 0))  # tgt_len -- unused
 
-    # if num_buckets > 1:
-    #
-    #     def key_func(unused_1, unused_2, unused_3, src_len, tgt_len):
-    #         # Calculate bucket_width by maximum source sequence length.
-    #         # Pairs with length [0, bucket_width) go to bucket 0, length
-    #         # [bucket_width, 2 * bucket_width) go to bucket 1, etc.  Pairs with length
-    #         # over ((num_bucket-1) * bucket_width) words all go into the last bucket.
-    #         if max_enc_steps:
-    #             bucket_width = (src_max_len + num_buckets - 1) // num_buckets
-    #         else:
-    #             bucket_width = 10
-    #
-    #         # Bucket sentence pairs by the length of their source sentence and target
-    #         # sentence.
-    #         bucket_id = tf.maximum(src_len // bucket_width, tgt_len // bucket_width)
-    #         return tf.to_int64(tf.minimum(num_buckets, bucket_id))
-    #
-    #     def reduce_func(unused_key, windowed_data):
-    #         return batching_func(windowed_data)
-    #
-    #     batched_dataset = dataset.apply(
-    #         tf.contrib.data.group_by_window(
-    #             key_func=key_func, reduce_func=reduce_func, window_size=batch_size))
-    #
-    # else:
+
     batched_dataset = batching_func(dataset)
     batched_iter = batched_dataset.make_initializable_iterator()
-    (article, art_size,dec_input, dec_target, enc_mask, dec_mask, dec_input_len) = (batched_iter.get_next())
+    (src_ids, tgt_input_ids, tgt_output_ids, src_seq_len,
+     tgt_seq_len) = (batched_iter.get_next())
     return BatchedInput(
         initializer=batched_iter.initializer,
-        article=(article, art_size),
-        dec_input=(dec_input,dec_input_len),
-        dec_target=dec_target,
-        enc_mask = enc_mask,
-        dec_mask=dec_mask
-        )
+        source=src_ids,
+        target_input=tgt_input_ids,
+        target_output=tgt_output_ids,
+        source_sequence_length=src_seq_len,
+        target_sequence_length=tgt_seq_len)
 
 def abstract2sents(abstract):
   """Splits abstract text from datafile into list of sentences.
