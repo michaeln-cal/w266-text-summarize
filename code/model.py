@@ -15,7 +15,7 @@ class SummarizationModel(object):
         self.vocab_table = vocab_table
         self.reverse_target_vocab_table = reverse_target_vocab_table
         self.iterator = iterator
-
+        self.use_test_set = False
         self.mode = mode
         self.single_cell_fn = None
         self.time_major = False
@@ -31,9 +31,11 @@ class SummarizationModel(object):
 
         self.attention_mechanism_fn = create_attention_mechanism
         self.trunc_norm_init = tf.truncated_normal_initializer(stddev=hps.trunc_norm_init_std)
-        self.init_embeddings(hps)
 
-     # Projection
+        self.init_embeddings(hps)
+        self.batch_size = tf.size(self.iterator.source_sequence_length)
+
+        # Projection
         with tf.variable_scope(scope or "build_network"):
          with tf.variable_scope("decoder/output_projection"):
           self.output_layer = layers_core.Dense(hps.vocab_size, use_bias=False, name="output_projection")
@@ -83,18 +85,21 @@ class SummarizationModel(object):
                  params,
                  colocate_gradients_with_ops=hps.colocate_gradients_with_ops)
 
-             clipped_gradients, gradient_norm_summary = model_helper.gradient_clip(
-                 gradients, max_gradient_norm=hps.max_grad_norm)
+
+
+             clipped_grads, grad_norm_summary, grad_norm = model_helper.gradient_clip(
+                 gradients, max_gradient_norm=hps.max_gradient_norm)
+             self.grad_norm = grad_norm
 
              self.update = opt.apply_gradients(
-                 zip(clipped_gradients, params), global_step=self.global_step)
+                 zip(clipped_grads, params), global_step=self.global_step)
 
+             # Summary
              # Summary
              self.train_summary = tf.summary.merge([
                                                        tf.summary.scalar("lr", self.learning_rate),
                                                        tf.summary.scalar("train_loss", self.train_loss),
-                                                   ] + gradient_norm_summary)
-
+                                                   ] + grad_norm_summary)
          if self.mode == tf.contrib.learn.ModeKeys.INFER:
              self.infer_summary = self._get_infer_summary(hps)
 
@@ -114,6 +119,12 @@ class SummarizationModel(object):
                                         initializer=self.trunc_norm_init)
 
         self.embedding_encoder, self.embedding_decoder =embedding,embedding
+
+    def eval(self, sess):
+        assert self.mode == tf.contrib.learn.ModeKeys.EVAL
+        return sess.run([self.eval_loss,
+                         self.predict_count,
+                         self.batch_size])
 
     def _build_encoder_cell(self, hps, num_layers, num_residual_layers=0,
                             base_gpu=0):
@@ -259,19 +270,19 @@ class SummarizationModel(object):
 
             ## Inference
             else:
-                beam_size = hps.beam_size
+                beam_width = hps.beam_width
                 length_penalty_weight = hps.length_penalty_weight
                 start_tokens = tf.fill([self.batch_size], tgt_sos_id)
                 end_token = tgt_eos_id
 
-                if beam_size > 0:
+                if beam_width > 0:
                     my_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
                         cell=cell,
                         embedding=self.embedding_decoder,
                         start_tokens=start_tokens,
                         end_token=end_token,
                         initial_state=decoder_initial_state,
-                        beam_width=beam_size,
+                        beam_width=beam_width,
                         output_layer=self.output_layer,
                         length_penalty_weight=length_penalty_weight)
                 else:
@@ -295,7 +306,7 @@ class SummarizationModel(object):
                     swap_memory=True,
                     scope=decoder_scope)
 
-                if beam_size > 0:
+                if beam_width > 0:
                     logits = tf.no_op()
                     sample_id = outputs.predicted_ids
                 else:
@@ -318,7 +329,7 @@ class SummarizationModel(object):
         num_layers = hps.num_layers
         num_residual_layers = hps.num_residual_layers
         num_gpus = hps.num_gpus
-        beam_size = hps.beam_size
+        beam_width = hps.beam_width
 
         dtype = tf.float32
         # Ensure memory is batch-major
@@ -327,14 +338,14 @@ class SummarizationModel(object):
         else:
             memory = encoder_outputs
 
-        if self.mode == tf.contrib.learn.ModeKeys.INFER and beam_size > 0:
+        if self.mode == tf.contrib.learn.ModeKeys.INFER and beam_width > 0:
             memory = tf.contrib.seq2seq.tile_batch(
-                memory, multiplier=beam_size)
+                memory, multiplier=beam_width)
             source_sequence_length = tf.contrib.seq2seq.tile_batch(
-                source_sequence_length, multiplier=beam_size)
+                source_sequence_length, multiplier=beam_width)
             encoder_state = tf.contrib.seq2seq.tile_batch(
-                encoder_state, multiplier=beam_size)
-            batch_size = self.batch_size * beam_size
+                encoder_state, multiplier=beam_width)
+            batch_size = self.batch_size * beam_width
         else:
             batch_size = self.batch_size
 
@@ -354,7 +365,7 @@ class SummarizationModel(object):
 
         # Only generate alignment in greedy INFER mode.
         alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
-                             beam_size == 0)
+                             beam_width == 0)
         cell = tf.contrib.seq2seq.AttentionWrapper(
             cell,
             attention_mechanism,
@@ -525,7 +536,10 @@ class SummarizationModel(object):
                          self.predict_count,
                          self.train_summary,
                          self.global_step,
-                         self.word_count])
+                         self.word_count,
+                         self.batch_size,
+                         self.grad_norm,
+                         self.learning_rate])
 
     def infer(self, sess):
         assert self.mode == tf.contrib.learn.ModeKeys.INFER

@@ -1,15 +1,13 @@
 """Utility functions for building models."""
 from __future__ import print_function
 
-import collections
 import time
 
+import collections
 import tensorflow as tf
 
-from tensorflow.python.ops import lookup_ops
-
+import data
 import misc_utils as utils
-
 
 __all__ = [
     "get_initializer", "get_device_str",
@@ -19,6 +17,184 @@ __all__ = [
 ]
 
 
+def get_initializer(init_op, seed=None, init_weight=None):
+  """Create an initializer. init_weight is only for uniform."""
+  if init_op == "uniform":
+    assert init_weight
+    return tf.random_uniform_initializer(
+        -init_weight, init_weight, seed=seed)
+  elif init_op == "glorot_normal":
+    return tf.keras.initializers.glorot_normal(
+        seed=seed)
+  elif init_op == "glorot_uniform":
+    return tf.keras.initializers.glorot_uniform(
+        seed=seed)
+  else:
+    raise ValueError("Unknown init_op %s" % init_op)
+
+
+def get_device_str(device_id, num_gpus):
+  """Return a device string for multi-GPU setup."""
+  if num_gpus == 0:
+    return "/cpu:0"
+  device_str_output = "/gpu:%d" % (device_id % num_gpus)
+  return device_str_output
+
+
+class ExtraArgs(collections.namedtuple(
+    "ExtraArgs", ("single_cell_fn", "model_device_fn",
+                  "attention_mechanism_fn"))):
+  pass
+
+
+class TrainModel(
+    collections.namedtuple("TrainModel", ("graph", "model", "iterator",
+                                          "skip_count_placeholder"))):
+  pass
+
+
+def create_train_model(
+    model_creator, hps, scope=None,
+    extra_args=None):
+
+
+  graph = tf.Graph()
+
+  with graph.as_default(), tf.container(scope or "train"):
+    vocab_table = data.create_vocab_tables(hps.vocab_file, hps.vocab_size, hps.unk_id)
+    train_dataset = data.get_dataset(hps.data_dir, hps.train_prefix)
+
+    skip_count_placeholder = tf.placeholder(shape=(), dtype=tf.int64)
+    iterator = data.get_iterator(train_dataset, vocab_table, hps)
+
+    # Note: One can set model_device_fn to
+    # `tf.train.replica_device_setter(ps_tasks)` for distributed training.
+    model_device_fn = None
+    if extra_args: model_device_fn = extra_args.model_device_fn
+    with tf.device(model_device_fn):
+      model = model_creator(
+          iterator=iterator,
+          hps= hps,
+          mode=tf.contrib.learn.ModeKeys.TRAIN,
+          vocab_table=vocab_table,
+          scope=scope)
+
+  return TrainModel(
+      graph=graph,
+      model=model,
+      iterator=iterator,
+      skip_count_placeholder=skip_count_placeholder)
+
+
+class EvalModel(
+    collections.namedtuple("EvalModel",
+                           ("graph", "model", "src_file_placeholder",
+                            "tgt_file_placeholder", "iterator"))):
+    pass
+
+def create_eval_model(model_creator, hps, scope=None, extra_args=None):
+  """Create train graph, model, src/tgt file holders, and iterator."""
+
+
+
+  graph = tf.Graph()
+  with graph.as_default(), tf.container(scope or "eval"):
+    vocab_table = data.create_vocab_tables(hps.vocab_file, hps.vocab_size, hps.unk_id)
+    src_file_placeholder = tf.placeholder(shape=[None], dtype=tf.string)
+    tgt_file_placeholder = tf.placeholder(shape=[None], dtype=tf.string)
+
+
+    article_data_set = tf.data.TextLineDataset(src_file_placeholder)
+    abstract_data_set = tf.data.TextLineDataset(tgt_file_placeholder)
+    dataset = tf.data.Dataset.zip((article_data_set, abstract_data_set))
+
+    iterator = data.get_iterator(dataset, vocab_table, hps)
+
+    model = model_creator(
+        iterator=iterator,
+        hps=hps,
+        mode=tf.contrib.learn.ModeKeys.EVAL,
+        vocab_table=vocab_table,
+        scope=scope)
+
+  return EvalModel(
+      graph=graph,
+      model=model,
+      src_file_placeholder=src_file_placeholder,
+      tgt_file_placeholder=tgt_file_placeholder,
+      iterator=iterator)
+
+class TestModel(
+    collections.namedtuple("TestModel",
+                           ("graph", "model", "iterator"))):
+  pass
+
+
+def create_test_model(model_creator, hps, scope=None, extra_args=None):
+  """Create train graph, model, src/tgt file holders, and iterator."""
+
+  graph = tf.Graph()
+
+  with graph.as_default(), tf.container(scope or "test"):
+    vocab_table = data.create_vocab_tables(hps.vocab_file, hps.vocab_size, hps.unk_id)
+    test_dataset = data.get_dataset(hps.data_dir, hps.test_prefix)
+
+    iterator = data.get_iterator(test_dataset, vocab_table, hps)
+
+    model = model_creator(
+        iterator=iterator,
+        hps=hps,
+        mode=tf.contrib.learn.ModeKeys.EVAL,
+        vocab_table=vocab_table,
+        scope=scope)
+
+  return TestModel(
+      graph=graph,
+      model=model,
+      iterator=iterator)
+
+
+
+class InferModel(
+    collections.namedtuple("InferModel",
+                           ("graph", "model",
+                            "batch_size_placeholder", "src_placeholder", "iterator"))):
+  pass
+
+
+def create_infer_model(model_creator, hps, scope=None, sampling=None):
+  """Create inference model."""
+  graph = tf.Graph()
+
+  with graph.as_default(), tf.container(scope or "infer"):
+    vocab_table = data.create_vocab_tables(hps.vocab_file, hps.vocab_size, hps.unk_id)
+    reverse_target_vocab_table = data.create_id_tables(hps.vocab_file, hps.vocab_size)
+
+    src_placeholder = tf.placeholder(shape=[None], dtype=tf.string)
+    batch_size_placeholder = tf.placeholder(shape=[], dtype=tf.int64)
+
+    src_dataset = tf.data.Dataset.from_tensor_slices(
+        src_placeholder)
+
+
+
+
+    iterator = data.get_infer_iterator(src_dataset, vocab_table,batch_size_placeholder,reverse_target_vocab_table,hps.max_enc_steps)
+
+    model = model_creator(
+        iterator=iterator,
+        hps=hps,
+        mode=tf.contrib.learn.ModeKeys.INFER,
+        vocab_table=vocab_table,
+        reverse_target_vocab_table = reverse_target_vocab_table,
+        scope=scope)
+
+  return InferModel(
+      graph=graph,
+      model=model,
+      batch_size_placeholder=batch_size_placeholder,
+      src_placeholder=src_placeholder,
+      iterator=iterator)
 
 
 
@@ -83,7 +259,8 @@ def _cell_list(unit_type, num_units, num_layers, num_residual_layers,
   # Multi-GPU
   cell_list = []
   for i in range(num_layers):
-    utils.print_out("  cell %d" % i, new_line=False)
+    utils.print_out("  creating cell %d" % i, new_line=False)
+
     single_cell = single_cell_fn(
         unit_type=unit_type,
         num_units=num_units,
@@ -137,11 +314,13 @@ def create_rnn_cell(unit_type, num_units, num_layers, num_residual_layers,
                          base_gpu=base_gpu,
                          single_cell_fn=single_cell_fn)
 
+
   if len(cell_list) == 1:  # Single layer.
     return cell_list[0]
   else:  # Multi layers
-    return tf.contrib.rnn.MultiRNNCell(cell_list)
+    utils.print_out("before returning multiRNN cell")
 
+    return tf.contrib.rnn.MultiRNNCell(cell_list)
 
 def gradient_clip(gradients, max_gradient_norm):
   """Clipping gradients of a model."""
@@ -151,7 +330,7 @@ def gradient_clip(gradients, max_gradient_norm):
   gradient_norm_summary.append(
       tf.summary.scalar("clipped_gradient", tf.global_norm(clipped_gradients)))
 
-  return clipped_gradients, gradient_norm_summary
+  return clipped_gradients, gradient_norm_summary, gradient_norm
 
 
 def load_model(model, ckpt, session, name):
@@ -163,6 +342,12 @@ def load_model(model, ckpt, session, name):
       (name, ckpt, time.time() - start_time))
   return model
 
+def get_device_str(device_id, num_gpus):
+  """Return a device string for multi-GPU setup."""
+  if num_gpus == 0:
+    return "/cpu:0"
+  device_str_output = "/gpu:%d" % (device_id % num_gpus)
+  return device_str_output
 
 def create_or_load_model(model, model_dir, session, name):
   """Create translation model and initialize or load parameters in session."""
