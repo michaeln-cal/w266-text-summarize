@@ -5,7 +5,7 @@ from __future__ import print_function
 import numpy as np
 import struct
 from tensorflow.core.example import example_pb2
-
+import os
 SENTENCE_START = '<s>'
 SENTENCE_END = '</s>'
 
@@ -76,11 +76,11 @@ if __name__ == '__main__':
     vocab_file='/Users/giang/Downloads/finished_files/vocab_copy'
 
 
-    # for file in os.listdir(data_dir):
-    #     if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
-    #
-    #         write_file(target_dir+'/article',file,read_article_file(data_dir+'/'+file))
-    #         write_file(target_dir+'/abstract',file,read_abstract_file(data_dir+'/'+file))
+    for file in os.listdir(data_dir):
+        if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
+
+            write_file(target_dir+'/article',file,read_article_file(data_dir+'/'+file))
+            write_file(target_dir+'/abstract',file,read_abstract_file(data_dir+'/'+file))
 
 
 
