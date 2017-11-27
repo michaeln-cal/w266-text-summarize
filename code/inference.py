@@ -21,7 +21,8 @@ import time
 import codecs
 import model_helper
 import tensorflow as tf
-from model import SummarizationModel
+from model import Model
+from attention_model import AttentionModel
 
 import misc_utils as utils
 
@@ -90,7 +91,7 @@ def inference(ckpt,
     assert num_workers == 1
 
 
-  model_creator = SummarizationModel
+  model_creator = AttentionModel
 
   infer_model = model_helper.create_infer_model(model_creator, hparams, scope)
 

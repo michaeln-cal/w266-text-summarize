@@ -5,9 +5,10 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.layers import core as layers_core
 import model_helper
+import misc_utils as utils
 
 
-class SummarizationModel(object):
+class Model(object):
 
     def __init__(self, iterator, hps, mode, vocab_table,reverse_target_vocab_table=None, scope=None):
         self.init_iter = iterator.initializer
@@ -23,16 +24,15 @@ class SummarizationModel(object):
 
         # self._output_layer = layers_core.Dense(
         #     self._vocab[1], use_bias=False, name="output_projection")
-        self.start_decoding = tf.cast(vocab_table.lookup(tf.constant(hps.START_DECODING)), tf.int32)
-        self.stop_decoding = tf.cast(vocab_table.lookup(tf.constant(hps.STOP_DECODING)), tf.int32)
+        # self.start_decoding = tf.cast(vocab_table.lookup(tf.constant(hps.START_DECODING)), tf.int32)
+        # self.stop_decoding = tf.cast(vocab_table.lookup(tf.constant(hps.STOP_DECODING)), tf.int32)
 
         #init
-        self.rand_unif_init = tf.random_uniform_initializer(-hps.rand_unif_init_mag, hps.rand_unif_init_mag, seed=123)
+        # self.rand_unif_init = tf.random_uniform_initializer(-hps.rand_unif_init_mag, hps.rand_unif_init_mag, seed=123)
+        #
+        # self.trunc_norm_init = tf.truncated_normal_initializer(stddev=hps.trunc_norm_init_std)
 
-        self.attention_mechanism_fn = create_attention_mechanism
-        self.trunc_norm_init = tf.truncated_normal_initializer(stddev=hps.trunc_norm_init_std)
-
-        self.init_embeddings(hps)
+        self.init_embeddings(hps, scope)
         self.batch_size = tf.size(self.iterator.source_sequence_length)
 
         # Projection
@@ -112,13 +112,25 @@ class SummarizationModel(object):
              print("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                                param.op.device))
 
-    def init_embeddings(self, hps):
+    # def init_embeddings(self, hps):
+    #     """Init embeddings."""
+    #
+    #     embedding = tf.get_variable('embedding', [self.hps.vocab_size, self.hps.emb_dim], dtype=tf.float32,
+    #                                     initializer=self.trunc_norm_init)
+    #
+    #     self.embedding_encoder, self.embedding_decoder =embedding,embedding
+
+    def init_embeddings(self, hparams, scope):
         """Init embeddings."""
-
-        embedding = tf.get_variable('embedding', [self.hps.vocab_size, self.hps.emb_dim], dtype=tf.float32,
-                                        initializer=self.trunc_norm_init)
-
-        self.embedding_encoder, self.embedding_decoder =embedding,embedding
+        self.embedding_encoder, self.embedding_decoder = (
+            model_helper.create_emb_for_encoder_and_decoder(
+                share_vocab=hparams.share_vocab,
+                src_vocab_size=hparams.vocab_size,
+                tgt_vocab_size=hparams.vocab_size,
+                src_embed_size=hparams.num_units,
+                tgt_embed_size=hparams.num_units,
+                num_partitions=hparams.num_embeddings_partitions,
+                scope=scope, ))
 
     def eval(self, sess):
         assert self.mode == tf.contrib.learn.ModeKeys.EVAL
@@ -126,47 +138,82 @@ class SummarizationModel(object):
                          self.predict_count,
                          self.batch_size])
 
-    def _build_encoder_cell(self, hps, num_layers, num_residual_layers=0,
+    def _build_encoder(self, hparams):
+        """Build an encoder."""
+        num_layers = hparams.num_layers
+        num_residual_layers = hparams.num_residual_layers
+
+        iterator = self.iterator
+
+        source = iterator.source
+        if self.time_major:
+            source = tf.transpose(source)
+
+        with tf.variable_scope("encoder") as scope:
+            dtype = scope.dtype
+            # Look up embedding, emp_inp: [max_time, batch_size, num_units]
+            encoder_emb_inp = tf.nn.embedding_lookup(
+                self.embedding_encoder, source)
+
+            # Encoder_outpus: [max_time, batch_size, num_units]
+            if hparams.encoder_type == "uni":
+                utils.print_out("  num_layers = %d, num_residual_layers=%d" %
+                                (num_layers, num_residual_layers))
+                cell = self._build_encoder_cell(
+                    hparams, num_layers, num_residual_layers)
+
+                encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
+                    cell,
+                    encoder_emb_inp,
+                    dtype=dtype,
+                    sequence_length=iterator.source_sequence_length,
+                    time_major=self.time_major,
+                    swap_memory=True)
+            elif hparams.encoder_type == "bi":
+                num_bi_layers = int(num_layers / 2)
+                num_bi_residual_layers = int(num_residual_layers / 2)
+                utils.print_out("  num_bi_layers = %d, num_bi_residual_layers=%d" %
+                                (num_bi_layers, num_bi_residual_layers))
+
+                encoder_outputs, bi_encoder_state = (
+                    self._build_bidirectional_rnn(
+                        inputs=encoder_emb_inp,
+                        sequence_length=iterator.source_sequence_length,
+                        dtype=dtype,
+                        hparams=hparams,
+                        num_bi_layers=num_bi_layers,
+                        num_bi_residual_layers=num_bi_residual_layers))
+
+                if num_bi_layers == 1:
+                    encoder_state = bi_encoder_state
+                else:
+                    # alternatively concat forward and backward states
+                    encoder_state = []
+                    for layer_id in range(num_bi_layers):
+                        encoder_state.append(bi_encoder_state[0][layer_id])  # forward
+                        encoder_state.append(bi_encoder_state[1][layer_id])  # backward
+                    encoder_state = tuple(encoder_state)
+            else:
+                raise ValueError("Unknown encoder_type %s" % hparams.encoder_type)
+        return encoder_outputs, encoder_state
+
+    def _build_encoder_cell(self, hparams, num_layers, num_residual_layers,
                             base_gpu=0):
         """Build a multi-layer RNN cell that can be used by encoder."""
 
         return model_helper.create_rnn_cell(
-            unit_type=hps.unit_type,
-            num_units=hps.hidden_dim,
+            unit_type=hparams.unit_type,
+            num_units=hparams.num_units,
             num_layers=num_layers,
             num_residual_layers=num_residual_layers,
-            forget_bias=hps.forget_bias,
-            dropout=hps.dropout,
-            num_gpus=hps.num_gpus,
+            forget_bias=hparams.forget_bias,
+            dropout=hparams.dropout,
+            num_gpus=hparams.num_gpus,
             mode=self.mode,
             base_gpu=base_gpu,
             single_cell_fn=self.single_cell_fn)
 
-    def _add_encoder(self, encoder_inputs, seq_len):
-        """Add a single-layer bidirectional LSTM encoder to the graph.
 
-        Args:
-          encoder_inputs: A tensor of shape [batch_size, <=max_enc_steps, emb_size].
-          seq_len: Lengths of encoder_inputs (before padding). A tensor of shape [batch_size].
-
-
-        Returns:
-          encoder_outputs:
-            A tensor of shape [batch_size, <=max_enc_steps, 2*hidden_dim]. It's 2*hidden_dim because it's the concatenation of the forwards and backwards states.
-          fw_state, bw_state:
-            Each are LSTMStateTuples of shape ([batch_size,hidden_dim],[batch_size,hidden_dim])
-        """
-        with tf.variable_scope('encoder'):
-            cell_fw = tf.contrib.rnn.LSTMCell(self.hps.hidden_dim, initializer=self.rand_unif_init,
-                                              state_is_tuple=True)
-            cell_bw = tf.contrib.rnn.LSTMCell(self.hps.hidden_dim, initializer=self.rand_unif_init,
-                                              state_is_tuple=True)
-            (encoder_outputs, (fw_st, bw_st)) = tf.nn.bidirectional_dynamic_rnn(cell_fw, cell_bw, encoder_inputs,
-                                                                                dtype=tf.float32,
-                                                                                sequence_length=seq_len,
-                                                                                swap_memory=True)
-            encoder_outputs = tf.concat(axis=2, values=encoder_outputs)  # concatenate the forwards and backwards states
-        return encoder_outputs, fw_st, bw_st
 
     def _reduce_states(self, fw_st, bw_st):
         """Add to the graph a linear layer to reduce the encoder's final FW and BW state into a single initial state for the decoder. This is needed because the encoder is bidirectional but the decoder is not.
@@ -209,9 +256,9 @@ class SummarizationModel(object):
           A tuple of final logits and final decoder state:
             logits: size [time, batch_size, vocab_size] when time_major=True.
         """
-        tgt_sos_id = tf.cast(self.vocab_table.lookup(tf.constant(hps.START_DECODING)),
+        tgt_sos_id = tf.cast(self.vocab_table.lookup(tf.constant(hps.sos)),
                              tf.int32)
-        tgt_eos_id = tf.cast(self.vocab_table.lookup(tf.constant(hps.STOP_DECODING)),
+        tgt_eos_id = tf.cast(self.vocab_table.lookup(tf.constant(hps.eos)),
                              tf.int32)
 
         num_layers = hps.num_layers
@@ -234,6 +281,7 @@ class SummarizationModel(object):
                 # decoder_emp_inp: [max_time, batch_size, num_units]
                 target_input = iterator.target_input
                 if self.time_major:
+                    print("time major")
                     target_input = tf.transpose(target_input)
                 decoder_emb_inp = tf.nn.embedding_lookup(
                     self.embedding_decoder, target_input)
@@ -248,7 +296,7 @@ class SummarizationModel(object):
                     cell,
                     helper,
                     decoder_initial_state, )
-
+                print("after my decoder")
                 # Dynamic decoding
                 outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
                     my_decoder,
@@ -315,74 +363,33 @@ class SummarizationModel(object):
 
         return logits, sample_id, final_context_state
 
-    def _build_decoder_cell(self, hps, encoder_outputs, encoder_state,
+    def _build_decoder_cell(self, hparams, encoder_outputs, encoder_state,
                             source_sequence_length):
-        """Build a RNN cell with attention mechanism that can be used by decoder."""
-        attention_option = hps.attention
-        attention_architecture = hps.attention_architecture
+        """Build an RNN cell that can be used by decoder."""
+        # We only make use of encoder_outputs in attention-based models
+        if hparams.attention:
+            raise ValueError("BasicModel doesn't support attention.")
 
-        if attention_architecture != "standard":
-            raise ValueError(
-                "Unknown attention architecture %s" % attention_architecture)
-
-        num_units = hps.num_units
-        num_layers = hps.num_layers
-        num_residual_layers = hps.num_residual_layers
-        num_gpus = hps.num_gpus
-        beam_width = hps.beam_width
-
-        dtype = tf.float32
-        # Ensure memory is batch-major
-        if self.time_major:
-            memory = tf.transpose(encoder_outputs, [1, 0, 2])
-        else:
-            memory = encoder_outputs
-
-        if self.mode == tf.contrib.learn.ModeKeys.INFER and beam_width > 0:
-            memory = tf.contrib.seq2seq.tile_batch(
-                memory, multiplier=beam_width)
-            source_sequence_length = tf.contrib.seq2seq.tile_batch(
-                source_sequence_length, multiplier=beam_width)
-            encoder_state = tf.contrib.seq2seq.tile_batch(
-                encoder_state, multiplier=beam_width)
-            batch_size = self.batch_size * beam_width
-        else:
-            batch_size = self.batch_size
-
-        attention_mechanism = self.attention_mechanism_fn(
-            attention_option, num_units, memory, source_sequence_length, self.mode)
+        num_layers = hparams.num_layers
+        num_residual_layers = hparams.num_residual_layers
 
         cell = model_helper.create_rnn_cell(
-            unit_type=hps.unit_type,
-            num_units=num_units,
+            unit_type=hparams.unit_type,
+            num_units=hparams.num_units,
             num_layers=num_layers,
             num_residual_layers=num_residual_layers,
-            forget_bias=hps.forget_bias,
-            dropout=hps.dropout,
-            num_gpus=num_gpus,
+            forget_bias=hparams.forget_bias,
+            dropout=hparams.dropout,
+            num_gpus=hparams.num_gpus,
             mode=self.mode,
             single_cell_fn=self.single_cell_fn)
 
-        # Only generate alignment in greedy INFER mode.
-        alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
-                             beam_width == 0)
-        cell = tf.contrib.seq2seq.AttentionWrapper(
-            cell,
-            attention_mechanism,
-            attention_layer_size=num_units,
-            alignment_history=alignment_history,
-            name="attention")
-
-        # TODO(thangluong): do we need num_layers, num_gpus?
-        cell = tf.contrib.rnn.DeviceWrapper(cell,
-                                            model_helper.get_device_str(
-                                                num_layers - 1, num_gpus))
-
-        if hps.pass_hidden_state:
-            decoder_initial_state = cell.zero_state(batch_size, dtype).clone(
-                cell_state=encoder_state)
+        # For beam search, we need to replicate encoder infos beam_width times
+        if self.mode == tf.contrib.learn.ModeKeys.INFER and hparams.beam_width > 0:
+            decoder_initial_state = tf.contrib.seq2seq.tile_batch(
+                encoder_state, multiplier=hparams.beam_width)
         else:
-            decoder_initial_state = cell.zero_state(batch_size, dtype)
+            decoder_initial_state = encoder_state
 
         return cell, decoder_initial_state
 
@@ -402,12 +409,12 @@ class SummarizationModel(object):
                 tf.to_float(max_encoder_length) * decoding_length_factor))
         return maximum_iterations
 
-    def build_graph(self, hps, scope=None):
+    def build_graph(self, hparams, scope=None):
         """Subclass must implement this method.
 
         Creates a sequence-to-sequence model with dynamic RNN decoder API.
         Args:
-          hps: Hyperparameter configurations.
+          hparams: Hyperparameter configurations.
           scope: VariableScope for the created subgraph; default "dynamic_seq2seq".
 
         Returns:
@@ -422,32 +429,18 @@ class SummarizationModel(object):
             attention_option is not (luong | scaled_luong |
             bahdanau | normed_bahdanau).
         """
-        print("# creating %s graph ..." % self.mode)
+        utils.print_out("# creating %s graph ..." % self.mode)
         dtype = tf.float32
-        num_layers = hps.num_layers
-        num_gpus = hps.num_gpus
-
+        num_layers = hparams.num_layers
+        num_gpus = hparams.num_gpus
 
         with tf.variable_scope(scope or "dynamic_seq2seq", dtype=dtype):
             # Encoder
-            with tf.variable_scope('embedding'):
-
-                emb_enc_inputs = tf.nn.embedding_lookup(self.embedding_encoder,
-                                                        self.iterator.source)  # tensor with shape (batch_size, max_enc_steps, emb_size)
-
-            with tf.variable_scope('encoding'):
-            # Add the encoder.
-                encoder_outputs, fw_st, bw_st = self._add_encoder(emb_enc_inputs, self.iterator.source_sequence_length)
-                # enc_states = enc_outputs
-                # Our encoder is bidirectional and our decoder is unidirectional so we need to reduce the final encoder hidden state to the right size to be the initial decoder hidden state
-
-                dec_in_state = self._reduce_states(fw_st, bw_st)
-
-
+            encoder_outputs, encoder_state = self._build_encoder(hparams)
 
             ## Decoder
             logits, sample_id, final_context_state = self._build_decoder(
-                encoder_outputs, dec_in_state, self.hps)
+                encoder_outputs, encoder_state, hparams)
 
             ## Loss
             if self.mode != tf.contrib.learn.ModeKeys.INFER:
@@ -564,33 +557,44 @@ class SummarizationModel(object):
             sample_words = sample_words.transpose()
         return sample_words, infer_summary
 
-def create_attention_mechanism(attention_option, num_units, memory,
-                               source_sequence_length, mode):
-    """Create attention mechanism based on the attention_option."""
-    del mode  # unused
+    def _build_bidirectional_rnn(self, inputs, sequence_length,
+                                 dtype, hparams,
+                                 num_bi_layers,
+                                 num_bi_residual_layers,
+                                 base_gpu=0):
+        """Create and call biddirectional RNN cells.
 
-    # Mechanism
-    if attention_option == "luong":
-        attention_mechanism = tf.contrib.seq2seq.LuongAttention(
-            num_units, memory, memory_sequence_length=source_sequence_length)
-    elif attention_option == "scaled_luong":
-        attention_mechanism = tf.contrib.seq2seq.LuongAttention(
-            num_units,
-            memory,
-            memory_sequence_length=source_sequence_length,
-            scale=True)
-    elif attention_option == "bahdanau":
-        attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-            num_units, memory, memory_sequence_length=source_sequence_length)
-    elif attention_option == "normed_bahdanau":
-        attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-            num_units,
-            memory,
-            memory_sequence_length=source_sequence_length,
-            normalize=True)
-    else:
-        raise ValueError("Unknown attention option %s" % attention_option)
+        Args:
+          num_residual_layers: Number of residual layers from top to bottom. For
+            example, if `num_bi_layers=4` and `num_residual_layers=2`, the last 2 RNN
+            layers in each RNN cell will be wrapped with `ResidualWrapper`.
+          base_gpu: The gpu device id to use for the first forward RNN layer. The
+            i-th forward RNN layer will use `(base_gpu + i) % num_gpus` as its
+            device id. The `base_gpu` for backward RNN cell is `(base_gpu +
+            num_bi_layers)`.
 
-    return attention_mechanism
+        Returns:
+          The concatenated bidirectional output and the bidirectional RNN cell"s
+          state.
+        """
+        # Construct forward and backward cells
+        fw_cell = self._build_encoder_cell(hparams,
+                                           num_bi_layers,
+                                           num_bi_residual_layers,
+                                           base_gpu=base_gpu)
+        bw_cell = self._build_encoder_cell(hparams,
+                                           num_bi_layers,
+                                           num_bi_residual_layers,
+                                           base_gpu=(base_gpu + num_bi_layers))
 
+        bi_outputs, bi_state = tf.nn.bidirectional_dynamic_rnn(
+            fw_cell,
+            bw_cell,
+            inputs,
+            dtype=dtype,
+            sequence_length=sequence_length,
+            time_major=self.time_major,
+            swap_memory=True)
+
+        return tf.concat(bi_outputs, -1), bi_state
 

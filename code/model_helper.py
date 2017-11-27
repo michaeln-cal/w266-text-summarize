@@ -179,7 +179,7 @@ def create_infer_model(model_creator, hps, scope=None, sampling=None):
 
 
 
-    iterator = data.get_infer_iterator(src_dataset, vocab_table,batch_size_placeholder,reverse_target_vocab_table,hps.max_enc_steps)
+    iterator = data.get_infer_iterator(src_dataset, vocab_table,batch_size_placeholder,reverse_target_vocab_table,hps.src_max_len)
 
     model = model_creator(
         iterator=iterator,
@@ -392,3 +392,67 @@ def compute_perplexity(model, sess, name):
   utils.print_time("  eval %s: perplexity %.2f" % (name, perplexity),
                    start_time)
   return perplexity
+
+def create_emb_for_encoder_and_decoder(share_vocab,
+                                       src_vocab_size,
+                                       tgt_vocab_size,
+                                       src_embed_size,
+                                       tgt_embed_size,
+                                       dtype=tf.float32,
+                                       num_partitions=0,
+                                       scope=None):
+  """Create embedding matrix for both encoder and decoder.
+
+  Args:
+    share_vocab: A boolean. Whether to share embedding matrix for both
+      encoder and decoder.
+    src_vocab_size: An integer. The source vocab size.
+    tgt_vocab_size: An integer. The target vocab size.
+    src_embed_size: An integer. The embedding dimension for the encoder's
+      embedding.
+    tgt_embed_size: An integer. The embedding dimension for the decoder's
+      embedding.
+    dtype: dtype of the embedding matrix. Default to float32.
+    num_partitions: number of partitions used for the embedding vars.
+    scope: VariableScope for the created subgraph. Default to "embedding".
+
+  Returns:
+    embedding_encoder: Encoder's embedding matrix.
+    embedding_decoder: Decoder's embedding matrix.
+
+  Raises:
+    ValueError: if use share_vocab but source and target have different vocab
+      size.
+  """
+
+  if num_partitions <= 1:
+    partitioner = None
+  else:
+    # Note: num_partitions > 1 is required for distributed training due to
+    # embedding_lookup tries to colocate single partition-ed embedding variable
+    # with lookup ops. This may cause embedding variables being placed on worker
+    # jobs.
+    partitioner = tf.fixed_size_partitioner(num_partitions)
+
+  with tf.variable_scope(
+      scope or "embeddings", dtype=dtype, partitioner=partitioner) as scope:
+    # Share embedding
+    if share_vocab:
+      if src_vocab_size != tgt_vocab_size:
+        raise ValueError("Share embedding but different src/tgt vocab sizes"
+                         " %d vs. %d" % (src_vocab_size, tgt_vocab_size))
+      utils.print_out("# Use the same source embeddings for target")
+      embedding = tf.get_variable(
+          "embedding_share", [src_vocab_size, src_embed_size], dtype)
+      embedding_encoder = embedding
+      embedding_decoder = embedding
+    else:
+      with tf.variable_scope("encoder", partitioner=partitioner):
+        embedding_encoder = tf.get_variable(
+            "embedding_encoder", [src_vocab_size, src_embed_size], dtype)
+
+      with tf.variable_scope("decoder", partitioner=partitioner):
+        embedding_decoder = tf.get_variable(
+            "embedding_decoder", [tgt_vocab_size, tgt_embed_size], dtype)
+
+  return embedding_encoder, embedding_decoder

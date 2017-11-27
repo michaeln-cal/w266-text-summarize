@@ -24,7 +24,8 @@ import os
 import random
 import tensorflow as tf
 import data
-from model import SummarizationModel
+from model import Model
+from attention_model import AttentionModel
 
 import misc_utils as utils
 
@@ -207,7 +208,10 @@ def train(hps, scope=None, target_session=""):
   if not steps_per_external_eval:
     steps_per_external_eval = 5 * steps_per_eval
 
-  model_creator = SummarizationModel
+  if not hps.attention:
+      model_creator = Model
+  else:
+      model_creator= AttentionModel
 
   train_model = model_helper.create_train_model(model_creator, hps, scope)
   eval_model = model_helper.create_eval_model(model_creator, hps, scope)
@@ -268,7 +272,7 @@ def train(hps, scope=None, target_session=""):
   summary_writer = tf.summary.FileWriter(
       os.path.join(out_dir, summary_name), train_model.graph)
 
-  # # First evaluation
+  # First evaluation
   # run_full_eval(
   #     model_dir, infer_model, infer_sess,
   #     eval_model, eval_sess, hps,
@@ -348,7 +352,7 @@ def train(hps, scope=None, target_session=""):
 
       # Evaluate on dev/test
       run_sample_decode(infer_model, infer_sess,
-                        model_dir, hps, summary_writer)
+                        model_dir, hps, summary_writer,sample_src_data, sample_tgt_data)
       dev_ppl, test_ppl = run_internal_eval(
           eval_model, eval_sess, model_dir, hps, summary_writer)
 
@@ -361,7 +365,7 @@ def train(hps, scope=None, target_session=""):
           os.path.join(out_dir, "summarized.ckpt"),
           global_step=global_step)
       run_sample_decode(infer_model, infer_sess,
-                        model_dir, hps, summary_writer)
+                        model_dir, hps, summary_writer,sample_src_data, sample_tgt_data)
       dev_scores, test_scores, _ = run_external_eval(
           infer_model, infer_sess, model_dir,
           hps, summary_writer)
@@ -375,7 +379,7 @@ def train(hps, scope=None, target_session=""):
   result_summary, _, dev_scores, test_scores, dev_ppl, test_ppl = run_full_eval(
       model_dir, infer_model, infer_sess,
       eval_model, eval_sess, hps,
-      summary_writer)
+      summary_writer,sample_src_data,sample_tgt_data)
   utils.print_out(
       "# Final, step %d lr %g "
       "step-time %.2f wps %.2fK ppl %.2f, %s, %s" %
@@ -393,7 +397,7 @@ def train(hps, scope=None, target_session=""):
         os.path.join(best_model_dir, summary_name), infer_model.graph)
     result_summary, best_global_step, _, _, _, _ = run_full_eval(
         best_model_dir, infer_model, infer_sess, eval_model, eval_sess, hps,
-        summary_writer)
+        summary_writer,sample_src_data,sample_tgt_data)
     utils.print_out("# Best %s, step %d "
                     "step-time %.2f wps %.2fK, %s, %s" %
                     (metric, best_global_step, avg_step_time, speed,

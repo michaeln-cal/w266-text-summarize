@@ -175,16 +175,16 @@ def get_iterator(dataset,
 
 
 
-    dataset = dataset.shuffle(output_buffer_size, random_seed)
+    # dataset = dataset.shuffle(output_buffer_size, random_seed)
     dataset = dataset.map(
         lambda article, abstract: (tf.string_split([article]).values,  tf.string_split([abstract]).values),
         num_parallel_calls=num_threads)
 
     dataset = dataset.map(
-            lambda src, tgt: (src[:hps.max_enc_steps], tgt),
+            lambda src, tgt: (src[:hps.src_max_len], tgt),
         num_parallel_calls=num_threads)
     dataset = dataset.map(
-            lambda src, tgt: (src, tgt[:hps.max_dec_steps]),
+            lambda src, tgt: (src, tgt[:hps.tgt_max_len]),
         num_parallel_calls=num_threads)
 
     dataset = dataset.map(
