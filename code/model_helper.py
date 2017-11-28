@@ -179,7 +179,7 @@ def create_infer_model(model_creator, hps, scope=None, sampling=None):
 
 
 
-    iterator = data.get_infer_iterator(src_dataset, vocab_table,batch_size_placeholder,reverse_target_vocab_table,hps.src_max_len)
+    iterator = data.get_infer_iterator(src_dataset, vocab_table,batch_size_placeholder,reverse_target_vocab_table,hps.eos,hps.src_max_len)
 
     model = model_creator(
         iterator=iterator,

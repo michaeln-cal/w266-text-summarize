@@ -453,6 +453,7 @@ def _sample_decode(model, global_step, sess, hps, iterator,src_data,tgt_data,ite
 
   if hps.beam_width > 0:
     # get the top translation.
+
     outputs = outputs[0]
 
   translation = utils.get_translation(
@@ -463,7 +464,7 @@ def _sample_decode(model, global_step, sess, hps, iterator,src_data,tgt_data,ite
 
   utils.print_out("    src: " + src_data[decode_id])
   utils.print_out("    ref: " + tgt_data[decode_id])
-  utils.print_out(b"    nmt: " + translation)
+  utils.print_out(b"    summarized: " + translation)
 
   # Summary
   if attention_summary is not None:

@@ -21,6 +21,7 @@ import train
 import evaluation_utils
 import misc_utils as utils
 import data
+import vocab_utils
 # from .util import vocab_utils
 
 
@@ -109,8 +110,8 @@ def add_arguments(parser):
 
   parser.add_argument(
       "--num_train_steps", type=int, default=12000, help="Num steps to train.")
-  parser.add_argument(
-      "--vocab_size", type=int, default=50000, help="vocab size limit.")
+  # parser.add_argument(
+  #     "--vocab_size", type=int, default=50000, help="vocab size limit.")
   parser.add_argument(
       "--unk_id", type=int, default=0, help="vocab size limit.")
 
@@ -195,7 +196,7 @@ def add_arguments(parser):
                       help="Clip gradients to this norm.")
   parser.add_argument("--source_reverse", type="bool", nargs="?", const=True,
                       default=False, help="Reverse source sequence.")
-  parser.add_argument("--batch_size", type=int, default=128, help="Batch size.")
+  parser.add_argument("--batch_size", type=int, default=30, help="Batch size.")
 
   parser.add_argument("--steps_per_stats", type=int, default=100,
                       help=("How many training steps to do per stats logging."
@@ -233,7 +234,7 @@ def add_arguments(parser):
   parser.add_argument("--random_seed", type=int, default=None,
                       help="Random seed (>0, set a specific seed).")
   parser.add_argument("--override_loaded_hparams", type="bool", nargs="?",
-                      const=True, default=False,
+                      const=True, default=True,
                       help="Override loaded hparams with values specified")
 
   # Inference
@@ -278,7 +279,7 @@ def create_hparams(flags):
       # Data
       src=flags.src,
       vocab_file=flags.vocab_file,
-      vocab_size=flags.vocab_size,
+      # vocab_size=flags.vocab_size,
       unk_id=flags.unk_id,
 
       test_src_file = flags.test_src_file,
@@ -342,8 +343,8 @@ def create_hparams(flags):
       num_translations_per_input=flags.num_translations_per_input,
 
       # Vocab
-      sos=flags.sos if flags.sos else data.SENTENCE_START,
-      eos=flags.eos if flags.eos else data.SENTENCE_END,
+      sos=flags.sos if flags.sos else vocab_utils.SOS,
+      eos=flags.eos if flags.eos else vocab_utils.EOS,
       subword_option=flags.subword_option,
       check_special_token=flags.check_special_token,
 
@@ -398,40 +399,18 @@ def extend_hparams(hparams):
     num_residual_layers = 0
   hparams.add_hparam("num_residual_layers", num_residual_layers)
 
-  ## Vocab
-  # Get vocab file names first
-  # if hparams.vocab_prefix:
-  #   src_vocab_file = hparams.vocab_prefix + "." + hparams.src
-  #   tgt_vocab_file = hparams.vocab_prefix + "." + hparams.tgt
-  # else:
-  #   raise ValueError("hparams.vocab_prefix must be provided.")
+  # Vocab
 
-  # Source vocab
-  # src_vocab_size, src_vocab_file = vocab_utils.check_vocab(
-  #     src_vocab_file,
-  #     hparams.out_dir,
-  #     check_special_token=hparams.check_special_token,
-  #     sos=hparams.sos,
-  #     eos=hparams.eos,
-  #     unk=vocab_utils.UNK)
 
-  # Target vocab
-  # if hparams.share_vocab:
-  #   util.print_out("  using source vocab for target")
-  #   tgt_vocab_file = src_vocab_file
-  #   tgt_vocab_size = src_vocab_size
-  # else:
-  #   tgt_vocab_size, tgt_vocab_file = vocab_utils.check_vocab(
-  #       tgt_vocab_file,
-  #       hparams.out_dir,
-  #       check_special_token=hparams.check_special_token,
-  #       sos=hparams.sos,
-  #       eos=hparams.eos,
-  #       unk=vocab_utils.UNK)
-  # hparams.add_hparam("src_vocab_size", src_vocab_size)
-  # hparams.add_hparam("tgt_vocab_size", tgt_vocab_size)
-  # hparams.add_hparam("src_vocab_file", src_vocab_file)
-  # hparams.add_hparam("tgt_vocab_file", tgt_vocab_file)
+  vocab_size, vocab_file = vocab_utils.check_vocab(
+        hparams.vocab_file,
+        hparams.out_dir,
+        check_special_token=hparams.check_special_token,
+        sos=hparams.sos,
+        eos=hparams.eos,
+        unk=vocab_utils.UNK)
+  hparams.add_hparam("vocab_size", vocab_size)
+  # hparams.add_hparam("vocab_file", vocab_file)
 
   # Check out_dir
   if not tf.gfile.Exists(hparams.out_dir):

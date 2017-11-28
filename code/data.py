@@ -24,14 +24,6 @@ import collections
 import numpy as np
 import random
 
-# <s> and </s> are used in the data files to segment the abstracts into sentences. They don't receive vocab ids.
-SENTENCE_START = '<s>'
-SENTENCE_END = '</s>'
-
-PAD_TOKEN = '[PAD]' # This has a vocab id, which is used to pad the encoder input, decoder input and target sequence
-UNKNOWN_TOKEN = '[UNK]' # This has a vocab id, which is used to represent out-of-vocabulary words
-START_DECODING = '[START]' # This has a vocab id, which is used at the start of every decoder input sequence
-STOP_DECODING = '[STOP]' # This has a vocab id, which is used at the end of untruncated target sequences
 UNK_ID=0
 # Note: none of <s>, </s>, [PAD], [UNK], [START], [STOP] should appear in the vocab file.
 
@@ -87,7 +79,7 @@ class BatchedInput(
 def create_vocab_tables(vocab_file,max_size, unk_id):
   """Creates vocab tables for src_vocab_file and tgt_vocab_file."""
   vocab_table = lookup_ops.index_table_from_file(
-      vocab_file, default_value=unk_id, vocab_size=max_size)
+      vocab_file, default_value=unk_id)
   return vocab_table
 
 # def create_id_tables(vocab_file, max_size):
@@ -108,15 +100,17 @@ def create_vocab_tables(vocab_file,max_size, unk_id):
 #       return vocab_table
 
 def create_id_tables(vocab_file, max_size):
-    return lookup_ops.index_to_string_table_from_file(vocab_file, default_value = UNKNOWN_TOKEN, vocab_size=max_size)
+    return lookup_ops.index_to_string_table_from_file(vocab_file, default_value = "<unk>")
 
 
 def get_infer_iterator(src_dataset,
                        src_vocab_table,
                        batch_size,
                        source_reverse,
+                       eos,
                        src_max_len=None):
-  src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(SENTENCE_END)), tf.int32)
+  src_eos_id = tf.cast(src_vocab_table.lookup(tf.constant(eos)), tf.int32)
+
   src_dataset = src_dataset.map(lambda src: tf.string_split([src]).values)
 
   if src_max_len:
@@ -165,17 +159,18 @@ def get_iterator(dataset,
                  num_shards=1,
                  shard_index=0):
     if not output_buffer_size:
-        output_buffer_size = hps.batch_size * 1000
+        output_buffer_size = hps.batch_size * 10
 
-    start_decoding = tf.cast(vocab_table.lookup(tf.constant(START_DECODING)), tf.int32)
-    stop_decoding = tf.cast(vocab_table.lookup(tf.constant(STOP_DECODING)), tf.int32)
+    src_eos_id = tf.cast(vocab_table.lookup(tf.constant(hps.eos)), tf.int32)
+    tgt_sos_id = tf.cast(vocab_table.lookup(tf.constant(hps.sos)), tf.int32)
+    tgt_eos_id = tf.cast(vocab_table.lookup(tf.constant(hps.eos)), tf.int32)
 
 
     dataset = dataset.shard(num_shards, shard_index)
 
 
 
-    # dataset = dataset.shuffle(output_buffer_size, random_seed)
+    dataset = dataset.shuffle(output_buffer_size, random_seed)
     dataset = dataset.map(
         lambda article, abstract: (tf.string_split([article]).values,  tf.string_split([abstract]).values),
         num_parallel_calls=num_threads)
@@ -197,8 +192,8 @@ def get_iterator(dataset,
     # Create a tgt_input prefixed with <sos> and a tgt_output suffixed with <eos>.
     dataset = dataset.map(
         lambda src, tgt: (src,
-                          tf.concat(([start_decoding], tgt), 0),
-                          tf.concat((tgt, [stop_decoding]), 0)),
+                          tf.concat(([tgt_sos_id], tgt), 0),
+                          tf.concat((tgt, [tgt_eos_id]), 0)),
         num_parallel_calls=num_threads)
     # Add in sequence lengths.
     dataset = dataset.map(
@@ -221,9 +216,9 @@ def get_iterator(dataset,
             # (Though notice we don't generally need to do this since
             # later on we will be masking out calculations past the true sequence.
             padding_values=(
-                stop_decoding,  # src
-                stop_decoding,  # tgt_input
-                stop_decoding,  # tgt_output
+                src_eos_id,  # src
+                tgt_eos_id,  # tgt_input
+                tgt_eos_id,  # tgt_output
                 0,  # src_len -- unused
                 0))  # tgt_len -- unused
 

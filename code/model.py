@@ -19,7 +19,7 @@ class Model(object):
         self.use_test_set = False
         self.mode = mode
         self.single_cell_fn = None
-        self.time_major = False
+        self.time_major = hps.time_major
         self.batch_size = hps.batch_size
 
         # self._output_layer = layers_core.Dense(
@@ -107,9 +107,9 @@ class Model(object):
          self.saver = tf.train.Saver(tf.global_variables())
 
          # Print trainable variables
-         print("# Trainable variables")
+         utils.print_out("# Trainable variables")
          for param in params:
-             print("  %s, %s, %s" % (param.name, str(param.get_shape()),
+             utils.print_out("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                                param.op.device))
 
     # def init_embeddings(self, hps):
@@ -281,7 +281,7 @@ class Model(object):
                 # decoder_emp_inp: [max_time, batch_size, num_units]
                 target_input = iterator.target_input
                 if self.time_major:
-                    print("time major")
+                    utils.print_out("time major")
                     target_input = tf.transpose(target_input)
                 decoder_emb_inp = tf.nn.embedding_lookup(
                     self.embedding_decoder, target_input)
@@ -296,7 +296,6 @@ class Model(object):
                     cell,
                     helper,
                     decoder_initial_state, )
-                print("after my decoder")
                 # Dynamic decoding
                 outputs, final_context_state, _ = tf.contrib.seq2seq.dynamic_decode(
                     my_decoder,
@@ -324,6 +323,7 @@ class Model(object):
                 end_token = tgt_eos_id
 
                 if beam_width > 0:
+                    utils.print_out("beam search activated")
                     my_decoder = tf.contrib.seq2seq.BeamSearchDecoder(
                         cell=cell,
                         embedding=self.embedding_decoder,
@@ -335,6 +335,8 @@ class Model(object):
                         length_penalty_weight=length_penalty_weight)
                 else:
                     # Helper
+                    utils.print_out("greedy decoding activated")
+
                     helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
                         self.embedding_decoder, start_tokens, end_token)
 
@@ -357,6 +359,12 @@ class Model(object):
                 if beam_width > 0:
                     logits = tf.no_op()
                     sample_id = outputs.predicted_ids
+                    # if self.time_major:
+                    #     sample_id = tf.transpose(sample_id, perm=[1, 2, 0])
+                    #     utils.print_out("transpose activated for sampleid   ")
+
+
+
                 else:
                     logits = outputs.rnn_output
                     sample_id = outputs.sample_id
@@ -400,10 +408,10 @@ class Model(object):
         """Maximum decoding steps at inference time."""
         if hps.tgt_max_len_infer:
             maximum_iterations = hps.tgt_max_len_infer
-            print("  decoding maximum_iterations %d" % maximum_iterations)
+            utils.print_out("  decoding maximum_iterations %d" % maximum_iterations)
         else:
             # TODO(thangluong): add decoding_length_factor flag
-            decoding_length_factor = 2.0
+            decoding_length_factor = 0.2
             max_encoder_length = tf.reduce_max(source_sequence_length)
             maximum_iterations = tf.to_int32(tf.round(
                 tf.to_float(max_encoder_length) * decoding_length_factor))
@@ -476,7 +484,7 @@ class Model(object):
         """Get learning rate warmup."""
         warmup_steps = hps.warmup_steps
         warmup_scheme = hps.warmup_scheme
-        print("  learning_rate=%g, warmup_steps=%d, warmup_scheme=%s" %
+        utils.print_out("  learning_rate=%g, warmup_steps=%d, warmup_scheme=%s" %
                         (hps.learning_rate, warmup_steps, warmup_scheme))
 
         # Apply inverse decay if global steps less than warmup steps.
@@ -508,7 +516,7 @@ class Model(object):
             start_decay_step = hps.start_decay_step
             decay_steps = hps.decay_steps
             decay_factor = hps.decay_factor
-        print("  decay_scheme=%s, start_decay_step=%d, decay_steps %d, "
+            utils.print_out("  decay_scheme=%s, start_decay_step=%d, decay_steps %d, "
               "decay_factor %g" %
               (hps.learning_rate_decay_scheme,
                hps.start_decay_step, hps.decay_steps, hps.decay_factor))
