@@ -1,452 +1,518 @@
+from __future__ import print_function
 
-import time
-
-import numpy as np
+import inference
 import os
-import struct
 import tensorflow as tf
+import train
 from collections import namedtuple
-from tensorflow.core.example import example_pb2
-from tensorflow.python import debug as tf_debug
+"""TensorFlow NMT model implementation."""
 
-import data
+import argparse
+import os
+import random
+import sys
+
+# import matplotlib.image as mpimg
+import numpy as np
+import tensorflow as tf
+
+import inference
+import train
+import evaluation_utils
 import misc_utils as utils
-from model import SummarizationModel
-import util
-FLAGS = tf.app.flags.FLAGS
-
-# Where to find data
-tf.app.flags.DEFINE_string('data_path', '', 'Path expression to tf.Example datafiles. Can include wildcards to access multiple datafiles.')
-tf.app.flags.DEFINE_string('vocab_path', '', 'Path expression to text vocabulary file.')
-
-# Important settings
-tf.app.flags.DEFINE_string('mode', 'train', 'must be one of train/eval/decode')
-tf.app.flags.DEFINE_boolean('single_pass', False, 'For decode mode only. If True, run eval on the full dataset using a fixed checkpoint, i.e. take the current checkpoint, and use it to produce one summary for each example in the dataset, write the summaries to file and then get ROUGE scores for the whole dataset. If False (default), run concurrent decoding, i.e. repeatedly load latest checkpoint, use it to produce summaries for randomly-chosen examples and log the results to screen, indefinitely.')
-tf.app.flags.DEFINE_boolean('pass_hidden_state', True, 'For decode mode only. If True, run eval on the full dataset using a fixed checkpoint, i.e. take the current checkpoint, and use it to produce one summary for each example in the dataset, write the summaries to file and then get ROUGE scores for the whole dataset. If False (default), run concurrent decoding, i.e. repeatedly load latest checkpoint, use it to produce summaries for randomly-chosen examples and log the results to screen, indefinitely.')
-
-# Where to save output
-tf.app.flags.DEFINE_string('log_root', '', 'Root directory for all logging.')
-tf.app.flags.DEFINE_string('warmup_scheme', 't2t', 'Root directory for all logging.')
-tf.app.flags.DEFINE_string('learning_rate_decay_scheme', '', 'Root directory for all logging.')
-tf.app.flags.DEFINE_string('optimizer', 'sgd', 'SGD.')
-tf.app.flags.DEFINE_string('unit_type', 'lstm', 'start of sentence')
+import data
+import vocab_utils
+# from .util import vocab_utils
 
 
-tf.app.flags.DEFINE_string('exp_name', '', 'Name for experiment. Logs will be saved in a directory with this name, under log_root.')
+FLAGS = None
 
-# Hyperparameters
-tf.app.flags.DEFINE_integer('hidden_dim', 256, 'dimension of RNN hidden states')
-tf.app.flags.DEFINE_integer('num_units', 256, 'dimension of RNN hidden states')
+def add_arguments(parser):
+  """Build ArgumentParser."""
+  parser.register("type", "bool", lambda v: v.lower() == "true")
 
-tf.app.flags.DEFINE_integer('num_gpus', 1, 'number of GPU')
-tf.app.flags.DEFINE_integer('num_residual_layers', 0, 'number residual')
+  # network
+  parser.add_argument("--num_units", type=int, default=32, help="Network size.")
+  parser.add_argument("--num_layers", type=int, default=2,
+                      help="Network depth.")
+  parser.add_argument("--encoder_type", type=str, default="uni", help="""\
+      uni | bi | gnmt. For bi, we build num_layers/2 bi-directional layers.For
+      gnmt, we build 1 bi-directional layer, and (num_layers - 1) uni-
+      directional layers.\
+      """)
+  parser.add_argument("--residual", type="bool", nargs="?", const=True,
+                      default=False,
+                      help="Whether to add residual connections.")
+  parser.add_argument("--time_major", type="bool", nargs="?", const=True,
+                      default=True,
+                      help="Whether to use time-major mode for dynamic RNN.")
+  parser.add_argument("--num_embeddings_partitions", type=int, default=0,
+                      help="Number of partitions for embedding vars.")
 
-tf.app.flags.DEFINE_integer('num_layers', 1, 'number of layers')
+  # attention mechanisms
+  parser.add_argument("--attention", type=str, default="", help="""\
+      luong | scaled_luong | bahdanau | normed_bahdanau or set to "" for no
+      attention\
+      """)
+  parser.add_argument(
+      "--attention_architecture",
+      type=str,
+      default="standard",
+      help="""\
+      standard | gnmt | gnmt_v2.
+      standard: use top layer to compute attention.
+      gnmt: GNMT style of computing attention, use previous bottom layer to
+          compute attention.
+      gnmt_v2: similar to gnmt, but use current bottom layer to compute
+          attention.\
+      """)
+  parser.add_argument(
+      "--output_attention", type="bool", nargs="?", const=True,
+      default=True,
+      help="""\
+      Only used in standard attention_architecture. Whether use attention as
+      the cell output at each timestep.
+      .\
+      """)
+  parser.add_argument(
+      "--pass_hidden_state", type="bool", nargs="?", const=True,
+      default=True,
+      help="""\
+      Whether to pass encoder's hidden state to decoder when using an attention
+      based model.\
+      """)
 
-tf.app.flags.DEFINE_integer('emb_dim', 128, 'dimension of word embeddings')
-tf.app.flags.DEFINE_integer('batch_size', 16, 'minibatch size')
-tf.app.flags.DEFINE_integer('max_enc_steps', 400, 'max timesteps of encoder (max source text tokens)')
-tf.app.flags.DEFINE_integer('max_dec_steps', 100, 'max timesteps of decoder (max summary tokens)')
-tf.app.flags.DEFINE_integer('beam_size', 6, 'beam size for beam search decoding.')
-tf.app.flags.DEFINE_integer('min_dec_steps', 35, 'Minimum sequence length of generated summary. Applies only for beam search decoding mode')
-tf.app.flags.DEFINE_integer('vocab_size', 50000, 'Size of vocabulary. These will be read from the vocabulary file in order. If the vocabulary file contains fewer words than this number, or if this number is set to 0, will take all words in the vocabulary file.')
-tf.app.flags.DEFINE_integer('warmup_steps', 1, 'warm up step ')
-tf.app.flags.DEFINE_integer('start_decay_step', 0, 'decay step ')
-tf.app.flags.DEFINE_integer('decay_steps', 10000, 'decay step ')
-tf.app.flags.DEFINE_integer('decay_factor', 1, 'decay step ')
-tf.app.flags.DEFINE_integer('num_train_steps', 12000, 'num train step ')
-tf.app.flags.DEFINE_integer('tgt_max_len_infer', None, 'num tag max len infer ')
+  # optimizer
+  parser.add_argument("--optimizer", type=str, default="sgd", help="sgd | adam")
+  parser.add_argument("--learning_rate", type=float, default=1.0,
+                      help="Learning rate. Adam: 0.001 | 0.0001")
+  parser.add_argument("--warmup_steps", type=int, default=0,
+                      help="How many steps we inverse-decay learning.")
+  parser.add_argument("--warmup_scheme", type=str, default="t2t", help="""\
+      How to warmup learning rates. Options include:
+        t2t: Tensor2Tensor's way, start with lr 100 times smaller, then
+             exponentiate until the specified lr.\
+      """)
+  parser.add_argument("--start_decay_step", type=int, default=0,
+                      help="When we start to decay")
+  parser.add_argument("--decay_steps", type=int, default=10000,
+                      help="How frequent we decay")
+  parser.add_argument("--decay_factor", type=float, default=1.0,
+                      help="How much we decay.")
+  parser.add_argument(
+      "--learning_rate_decay_scheme", type=str, default="", help="""\
+      If specified, overwrite start_decay_step, decay_steps, decay_factor.
+      Options include:
+        luong: after 1/2 num train steps, we start halving the learning rate
+        for 5 times before finishing.
+        luong10: same as luong but halve the learning rate 10 times instead.\
+      """)
 
+  parser.add_argument(
+      "--num_train_steps", type=int, default=12000, help="Num steps to train.")
+  # parser.add_argument(
+  #     "--vocab_size", type=int, default=50000, help="vocab size limit.")
+  parser.add_argument(
+      "--unk_id", type=int, default=0, help="vocab size limit.")
 
+  parser.add_argument("--colocate_gradients_with_ops", type="bool", nargs="?",
+                      const=True,
+                      default=True,
+                      help=("Whether try colocating gradients with "
+                            "corresponding op"))
 
+  # initializer
+  parser.add_argument("--init_op", type=str, default="uniform",
+                      help="uniform | glorot_normal | glorot_uniform")
+  parser.add_argument("--init_weight", type=float, default=0.1,
+                      help=("for uniform init_op, initialize weights "
+                            "between [-this, this]."))
 
+  # data
+  parser.add_argument("--src", type=str, default=None,
+                      help="Source suffix, e.g., en.")
+  parser.add_argument("--tgt", type=str, default=None,
+                      help="Target suffix, e.g., de.")
+  parser.add_argument("--train_prefix", type=str, default=None,
+                      help="Train prefix, expect files with src/tgt suffixes.")
+  parser.add_argument("--dev_prefix", type=str, default=None,
+                      help="Dev prefix, expect files with src/tgt suffixes.")
+  parser.add_argument("--test_prefix", type=str, default=None,
+                      help="Test prefix, expect files with src/tgt suffixes.")
+  parser.add_argument("--out_dir", type=str, default=None,
+                      help="Store log/model files.")
 
+  # Vocab
+  parser.add_argument("--vocab_prefix", type=str, default=None, help="""\
+      Vocab prefix, expect files with src/tgt suffixes.If None, extract from
+      train files.\
+      """)
+  parser.add_argument("--vocab_file", type=str, default=None, help="Vocab file")
+  parser.add_argument("--test_src_file", type=str, default=None, help="test source file")
+  parser.add_argument("--test_tgt_file", type=str, default=None, help="test tgt file")
 
-tf.app.flags.DEFINE_float('learning_rate', 0.15, 'learning rate')
-tf.app.flags.DEFINE_float('forget_bias', 1.0, 'forget bias ')
-tf.app.flags.DEFINE_float('dropout', 0.2, 'drop out')
-tf.app.flags.DEFINE_float('length_penalty_weight', 0.0, 'length penalty ')
-
-
-
-tf.app.flags.DEFINE_float('lr', 0.15, 'learning rate')
-
-
-
-tf.app.flags.DEFINE_float('adagrad_init_acc', 0.1, 'initial accumulator value for Adagrad')
-tf.app.flags.DEFINE_float('rand_unif_init_mag', 0.02, 'magnitude for lstm cells random uniform inititalization')
-tf.app.flags.DEFINE_float('trunc_norm_init_std', 1e-4, 'std of trunc norm init, used for initializing everything else')
-tf.app.flags.DEFINE_float('max_grad_norm', 2.0, 'for gradient clipping')
-
-# Pointer-generator or baseline model
-tf.app.flags.DEFINE_boolean('pointer_gen', False, 'If True, use pointer-generator model. If False, use baseline model.')
-
-# Coverage hyperparameters
-tf.app.flags.DEFINE_boolean('coverage', False, 'Use coverage mechanism. Note, the experiments reported in the ACL paper train WITHOUT coverage until converged, and then train for a short phase WITH coverage afterwards. i.e. to reproduce the results in the ACL paper, turn this off for most of training then turn on for a short phase at the end.')
-tf.app.flags.DEFINE_float('cov_loss_wt', 1.0, 'Weight of coverage loss (lambda in the paper). If zero, then no incentive to minimize coverage loss.')
-
-# Utility flags, for restoring and changing checkpoints
-tf.app.flags.DEFINE_boolean('convert_to_coverage_model', False, 'Convert a non-coverage model to a coverage model. Turn this on and run in train mode. Your current training model will be copied to a new version (same name with _cov_init appended) that will be ready to run with coverage flag turned on, for the coverage training stage.')
-tf.app.flags.DEFINE_boolean('restore_best_model', False, 'Restore the best model in the eval/ dir and save it in the train/ dir, ready to be used for further training. Useful for early stopping, or if your training checkpoint has become corrupted with e.g. NaN values.')
-
-# Debugging. See https://www.tensorflow.org/programmers_guide/debugger
-tf.app.flags.DEFINE_boolean('debug', False, "Run in tensorflow's debug mode (watches for NaN/inf values)")
-
-tf.app.flags.DEFINE_boolean('colocate_gradients_with_ops', True, "colocate gradient with norm")
-
-# Constant
-tf.app.flags.DEFINE_string('SENTENCE_START', '<s>', 'start of sentence')
-
-tf.app.flags.DEFINE_string('SENTENCE_END', '</s>', 'end of sentence')
-tf.app.flags.DEFINE_string('PAD_TOKEN', '[PAD]', 'Padding token')
-tf.app.flags.DEFINE_string('START_DECODING', '[START]', 'start decoding token')
-
-tf.app.flags.DEFINE_string('UNKNOWN_TOKEN', '[UNK]', 'unknown  token')
-
-tf.app.flags.DEFINE_string('STOP_DECODING', '[STOP]', 'start decoding token')
-tf.app.flags.DEFINE_string('attention', 'luong', 'Mechansim')
-
-tf.app.flags.DEFINE_string('attention_architecture', 'standard', 'standard')
-
-
-
-
-
-
-train_filenames = []
-test_filenames =[]
-val_filenames =[]
-
-dir = "/Users/giang/Downloads/finished_files/chunked"
-
-for file in os.listdir(dir):
-    if file.startswith("train_"):
-        train_filenames.append(dir+"/"+file)
-
-for file in os.listdir(dir):
-    if file.startswith("test_"):
-        test_filenames.append(dir+"/"+file)
-
-
-for file in os.listdir(dir):
-    if file.startswith("val_"):
-        val_filenames.append(dir+"/"+file)
-
-
-
-vocab_file ="/Users/giang/Downloads/finished_files/vocab_copy"
-
-# filename =['/Users/giang/train_127.bin']
-# filename2 ='/Users/giang/a.story'
-def read_file(filename):
-    reader = open(filename, 'rb')
-    len_bytes = reader.read(8)
-    str_len = struct.unpack('q', len_bytes)[0]
-    example_str = struct.unpack('%ds' % str_len, reader.read(str_len))[0]
-    example = example_pb2.Example.FromString(example_str)
-    article_text = example.features.feature['article'].bytes_list.value[0] # the article text was saved under the key 'article' in the data files
-    abstract_text = data.abstract2sents(str(example.features.feature['abstract'].bytes_list.value[0])) # the abstract text was saved under the key 'abstract' in the data files
-    # print(abstract_text)
-    return article_text,abstract_text
-
-# filenames =['/Users/giang/train_127.bin','/Users/giang/train_090.bin']
+  parser.add_argument("--dev_src_file", type=str, default=None, help="test source file")
+  parser.add_argument("--dev_tgt_file", type=str, default=None, help="dev tgt file")
+  parser.add_argument("--data_dir", type=str, default=None, help="data directory")
 
 
+  parser.add_argument("--sos", type=str, default="<s>",
+                      help="Start-of-sentence symbol.")
+  parser.add_argument("--eos", type=str, default="</s>",
+                      help="End-of-sentence symbol.")
+  parser.add_argument("--share_vocab", type="bool", nargs="?", const=True,
+                      default=True,
+                      help="""\
+      Whether to use the source vocab and embeddings for both source and
+      target.\
+      """)
+  parser.add_argument("--check_special_token", type="bool", default=True,
+                      help="""\
+                      Whether check special sos, eos, unk tokens exist in the
+                      vocab files.\
+                      """)
 
-def calc_running_avg_loss(loss, running_avg_loss, summary_writer, step, decay=0.99):
-  """Calculate the running average loss via exponential decay.
-  This is used to implement early stopping w.r.t. a more smooth loss curve than the raw loss curve.
+  # Sequence lengths
+  parser.add_argument("--src_max_len", type=int, default=400,
+                      help="Max length of src sequences during training.")
+  parser.add_argument("--tgt_max_len", type=int, default=150,
+                      help="Max length of tgt sequences during training.")
+  parser.add_argument("--src_max_len_infer", type=int, default=None,
+                      help="Max length of src sequences during inference.")
+  parser.add_argument("--tgt_max_len_infer", type=int, default=None,
+                      help="""\
+      Max length of tgt sequences during inference.  Also use to restrict the
+      maximum decoding length.\
+      """)
 
-  Args:
-    loss: loss on the most recent eval step
-    running_avg_loss: running_avg_loss so far
-    summary_writer: FileWriter object to write for tensorboard
-    step: training iteration step
-    decay: rate of exponential decay, a float between 0 and 1. Larger is smoother.
+  # Default settings works well (rarely need to change)
+  parser.add_argument("--unit_type", type=str, default="lstm",
+                      help="lstm | gru | layer_norm_lstm | nas")
+  parser.add_argument("--forget_bias", type=float, default=1.0,
+                      help="Forget bias for BasicLSTMCell.")
+  parser.add_argument("--dropout", type=float, default=0.2,
+                      help="Dropout rate (not keep_prob)")
+  parser.add_argument("--max_gradient_norm", type=float, default=5.0,
+                      help="Clip gradients to this norm.")
+  parser.add_argument("--source_reverse", type="bool", nargs="?", const=True,
+                      default=False, help="Reverse source sequence.")
+  parser.add_argument("--batch_size", type=int, default=30, help="Batch size.")
 
-  Returns:
-    running_avg_loss: new running average loss
-  """
-  if running_avg_loss == 0:  # on the first iteration just take the loss
-    running_avg_loss = loss
+  parser.add_argument("--steps_per_stats", type=int, default=100,
+                      help=("How many training steps to do per stats logging."
+                            "Save checkpoint every 10x steps_per_stats"))
+  parser.add_argument("--max_train", type=int, default=0,
+                      help="Limit on the size of training data (0: no limit).")
+  parser.add_argument("--num_buckets", type=int, default=5,
+                      help="Put data into similar-length buckets.")
+
+  # SPM
+  parser.add_argument("--subword_option", type=str, default="",
+                      choices=["", "bpe", "spm"],
+                      help="""\
+                      Set to bpe or spm to activate subword desegmentation.\
+                      """)
+
+  # Misc
+  parser.add_argument("--num_gpus", type=int, default=1,
+                      help="Number of gpus in each worker.")
+  parser.add_argument("--log_device_placement", type="bool", nargs="?",
+                      const=True, default=False, help="Debug GPU allocation.")
+  parser.add_argument("--metrics", type=str, default="bleu",
+                      help=("Comma-separated list of evaluations "
+                            "metrics (bleu,rouge,accuracy)"))
+  parser.add_argument("--steps_per_external_eval", type=int, default=None,
+                      help="""\
+      How many training steps to do per external evaluation.  Automatically set
+      based on data if None.\
+      """)
+  parser.add_argument("--scope", type=str, default=None,
+                      help="scope to put variables under")
+  parser.add_argument("--hparams_path", type=str, default=None,
+                      help=("Path to standard hparams json file that overrides"
+                            "hparams values from FLAGS."))
+  parser.add_argument("--random_seed", type=int, default=None,
+                      help="Random seed (>0, set a specific seed).")
+  parser.add_argument("--override_loaded_hparams", type="bool", nargs="?",
+                      const=True, default=True,
+                      help="Override loaded hparams with values specified")
+
+  # Inference
+  parser.add_argument("--ckpt", type=str, default="",
+                      help="Checkpoint file to load a model for inference.")
+  parser.add_argument("--inference_input_file", type=str, default=None,
+                      help="Set to the text to decode.")
+  parser.add_argument("--inference_list", type=str, default=None,
+                      help=("A comma-separated list of sentence indices "
+                            "(0-based) to decode."))
+  parser.add_argument("--infer_batch_size", type=int, default=32,
+                      help="Batch size for inference mode.")
+  parser.add_argument("--inference_output_file", type=str, default=None,
+                      help="Output file to store decoding results.")
+  parser.add_argument("--inference_ref_file", type=str, default=None,
+                      help=("""\
+      Reference file to compute evaluation scores (if provided).\
+      """))
+  parser.add_argument("--beam_width", type=int, default=0,
+                      help=("""\
+      beam width when using beam search decoder. If 0 (default), use standard
+      decoder with greedy helper.\
+      """))
+  parser.add_argument("--length_penalty_weight", type=float, default=0.0,
+                      help="Length penalty for beam search.")
+  parser.add_argument("--num_translations_per_input", type=int, default=1,
+                      help=("""\
+      Number of translations generated for each sentence. This is only used for
+      inference.\
+      """))
+
+  # Job info
+  parser.add_argument("--jobid", type=int, default=0,
+                      help="Task id of the worker.")
+  parser.add_argument("--num_workers", type=int, default=1,
+                      help="Number of workers (inference only).")
+
+
+def create_hparams(flags):
+  """Create training hparams."""
+  return tf.contrib.training.HParams(
+      # Data
+      src=flags.src,
+      vocab_file=flags.vocab_file,
+      # vocab_size=flags.vocab_size,
+      unk_id=flags.unk_id,
+
+      test_src_file = flags.test_src_file,
+      test_tgt_file = flags.test_tgt_file,
+      dev_src_file = flags.dev_src_file,
+      dev_tgt_file = flags.dev_tgt_file,
+      data_dir = flags.data_dir,
+
+      tgt=flags.tgt,
+      train_prefix=flags.train_prefix,
+      dev_prefix=flags.dev_prefix,
+      test_prefix=flags.test_prefix,
+      vocab_prefix=flags.vocab_prefix,
+      out_dir=flags.out_dir,
+
+      # Networks
+      num_units=flags.num_units,
+      num_layers=flags.num_layers,
+      dropout=flags.dropout,
+      unit_type=flags.unit_type,
+      encoder_type=flags.encoder_type,
+      residual=flags.residual,
+      time_major=flags.time_major,
+      num_embeddings_partitions=flags.num_embeddings_partitions,
+
+      # Attention mechanisms
+      attention=flags.attention,
+      attention_architecture=flags.attention_architecture,
+      output_attention=flags.output_attention,
+      pass_hidden_state=flags.pass_hidden_state,
+
+      # Train
+      optimizer=flags.optimizer,
+      num_train_steps=flags.num_train_steps,
+      batch_size=flags.batch_size,
+      init_op=flags.init_op,
+      init_weight=flags.init_weight,
+      max_gradient_norm=flags.max_gradient_norm,
+      learning_rate=flags.learning_rate,
+      warmup_steps=flags.warmup_steps,
+      warmup_scheme=flags.warmup_scheme,
+      start_decay_step=flags.start_decay_step,
+      decay_factor=flags.decay_factor,
+      decay_steps=flags.decay_steps,
+      learning_rate_decay_scheme=flags.learning_rate_decay_scheme,
+      colocate_gradients_with_ops=flags.colocate_gradients_with_ops,
+
+      # Data constraints
+      num_buckets=flags.num_buckets,
+      max_train=flags.max_train,
+      src_max_len=flags.src_max_len,
+      tgt_max_len=flags.tgt_max_len,
+      source_reverse=flags.source_reverse,
+
+      # Inference
+      src_max_len_infer=flags.src_max_len_infer,
+      tgt_max_len_infer=flags.tgt_max_len_infer,
+      infer_batch_size=flags.infer_batch_size,
+      beam_width=flags.beam_width,
+      length_penalty_weight=flags.length_penalty_weight,
+      num_translations_per_input=flags.num_translations_per_input,
+
+      # Vocab
+      sos=flags.sos if flags.sos else vocab_utils.SOS,
+      eos=flags.eos if flags.eos else vocab_utils.EOS,
+      subword_option=flags.subword_option,
+      check_special_token=flags.check_special_token,
+
+      # Misc
+      forget_bias=flags.forget_bias,
+      num_gpus=flags.num_gpus,
+      epoch_step=0,  # record where we were within an epoch.
+      steps_per_stats=flags.steps_per_stats,
+      steps_per_external_eval=flags.steps_per_external_eval,
+      share_vocab=flags.share_vocab,
+      metrics=flags.metrics.split(","),
+      log_device_placement=flags.log_device_placement,
+      random_seed=flags.random_seed,
+      override_loaded_hparams=flags.override_loaded_hparams,
+  )
+
+
+def extend_hparams(hparams):
+  """Extend training hparams."""
+  # Sanity checks
+  if hparams.encoder_type == "bi" and hparams.num_layers % 2 != 0:
+    raise ValueError("For bi, num_layers %d should be even" %
+                     hparams.num_layers)
+  if (hparams.attention_architecture in ["gnmt"] and
+      hparams.num_layers < 2):
+    raise ValueError("For gnmt attention architecture, "
+                     "num_layers %d should be >= 2" % hparams.num_layers)
+
+  if hparams.subword_option and hparams.subword_option not in ["spm", "bpe"]:
+    raise ValueError("subword option must be either spm, or bpe")
+
+  # Flags
+  utils.print_out("# hparams:")
+  utils.print_out("  src=%s" % hparams.src)
+  utils.print_out("  tgt=%s" % hparams.tgt)
+  utils.print_out("  train_prefix=%s" % hparams.train_prefix)
+  utils.print_out("  dev_prefix=%s" % hparams.dev_prefix)
+  utils.print_out("  test_prefix=%s" % hparams.test_prefix)
+  utils.print_out("  out_dir=%s" % hparams.out_dir)
+
+
+  # Set num_residual_layers
+  if hparams.residual and hparams.num_layers > 1:
+    if hparams.encoder_type == "gnmt":
+      # The first unidirectional layer (after the bi-directional layer) in
+      # the GNMT encoder can't have residual connection due to the input is
+      # the concatenation of fw_cell and bw_cell's outputs.
+      num_residual_layers = hparams.num_layers - 2
+    else:
+      num_residual_layers = hparams.num_layers - 1
   else:
-    running_avg_loss = running_avg_loss * decay + (1 - decay) * loss
-  running_avg_loss = min(running_avg_loss, 12)  # clip
-  loss_sum = tf.Summary()
-  tag_name = 'running_avg_loss/decay=%f' % (decay)
-  loss_sum.value.add(tag=tag_name, simple_value=running_avg_loss)
-  summary_writer.add_summary(loss_sum, step)
-  tf.logging.info('running_avg_loss: %f', running_avg_loss)
-  return running_avg_loss
+    num_residual_layers = 0
+  hparams.add_hparam("num_residual_layers", num_residual_layers)
+
+  # Vocab
 
 
-def restore_best_model():
-  """Load bestmodel file from eval directory, add variables for adagrad, and save to train directory"""
-  tf.logging.info("Restoring bestmodel for training...")
+  vocab_size, vocab_file = vocab_utils.check_vocab(
+        hparams.vocab_file,
+        hparams.out_dir,
+        check_special_token=hparams.check_special_token,
+        sos=hparams.sos,
+        eos=hparams.eos,
+        unk=vocab_utils.UNK)
+  hparams.add_hparam("vocab_size", vocab_size)
+  # hparams.add_hparam("vocab_file", vocab_file)
 
-  # Initialize all vars in the model
-  sess = tf.Session(config=util.get_config())
-  print("Initializing all variables...")
-  sess.run(tf.initialize_all_variables())
+  # Check out_dir
+  if not tf.gfile.Exists(hparams.out_dir):
+    utils.print_out("# Creating output directory %s ..." % hparams.out_dir)
+    tf.gfile.MakeDirs(hparams.out_dir)
 
-  # Restore the best model from eval dir
-  saver = tf.train.Saver([v for v in tf.all_variables() if "Adagrad" not in v.name])
-  print("Restoring all non-adagrad variables from best model in eval dir...")
-  curr_ckpt = util.load_ckpt(saver, sess, "eval")
-  print("Restored %s." % curr_ckpt)
+  # Evaluation
+  for metric in hparams.metrics:
+    hparams.add_hparam("best_" + metric, 0)  # larger is better
+    best_metric_dir = os.path.join(hparams.out_dir, "best_" + metric)
+    hparams.add_hparam("best_" + metric + "_dir", best_metric_dir)
+    tf.gfile.MakeDirs(best_metric_dir)
 
-  # Save this model to train dir and quit
-  new_model_name = curr_ckpt.split("/")[-1].replace("bestmodel", "model")
-  new_fname = os.path.join(FLAGS.log_root, "train", new_model_name)
-  print("Saving model to %s..." % (new_fname))
-  new_saver = tf.train.Saver() # this saver saves all variables that now exist, including Adagrad variables
-  new_saver.save(sess, new_fname)
-  print("Saved.")
-  exit()
+  return hparams
+def create_or_load_hparams(
+    out_dir, default_hparams, hparams_path, save_hparams=True):
+  """Create hparams or load hparams from out_dir."""
+  hparams = utils.load_hparams(out_dir)
+  if not hparams:
+    hparams = default_hparams
+    hparams = utils.maybe_parse_standard_hparams(
+        hparams, hparams_path)
+    hparams = extend_hparams(hparams)
+  # else:
+    # hparams = ensure_compatible_hparams(hparams, default_hparams, hparams_path)
 
+  # Save HParams
+  if save_hparams:
+    utils.save_hparams(out_dir, hparams)
+    for metric in hparams.metrics:
+      utils.save_hparams(getattr(hparams, "best_" + metric + "_dir"), hparams)
 
-def convert_to_coverage_model():
-  """Load non-coverage checkpoint, add initialized extra variables for coverage, and save as new checkpoint"""
-  tf.logging.info("converting non-coverage model to coverage model..")
-
-  # initialize an entire coverage model from scratch
-  sess = tf.Session(config=util.get_config())
-  print("initializing everything...")
-  sess.run(tf.global_variables_initializer())
-
-  # load all non-coverage weights from checkpoint
-  saver = tf.train.Saver([v for v in tf.global_variables() if "coverage" not in v.name and "Adagrad" not in v.name])
-  print("restoring non-coverage variables...")
-  curr_ckpt = util.load_ckpt(saver, sess)
-  print("restored.")
-
-  # save this model and quit
-  new_fname = curr_ckpt + '_cov_init'
-  print("saving model to %s..." % (new_fname))
-  new_saver = tf.train.Saver() # this one will save all variables that now exist
-  new_saver.save(sess, new_fname)
-  print("saved.")
-  exit()
+  # Print HParams
+  utils.print_hparams(hparams)
+  return hparams
 
 
-def setup_training(hps,model):
-  """Does setup before starting training (run_training)"""
-  train_dir = os.path.join(FLAGS.log_root, "train")
-  if not os.path.exists(train_dir): os.makedirs(train_dir)
+def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
+  """Run main."""
+  # Job
+  jobid = flags.jobid
+  num_workers = flags.num_workers
+  utils.print_out("# Job id %d" % jobid)
 
-  model.build_graph(hps) # build the graph
-  if FLAGS.convert_to_coverage_model:
-    assert FLAGS.coverage, "To convert your non-coverage model to a coverage model, run with convert_to_coverage_model=True and coverage=True"
-    convert_to_coverage_model()
-  if FLAGS.restore_best_model:
-    restore_best_model()
-  saver = tf.train.Saver(max_to_keep=3) # keep 3 checkpoints at a time
+  # Random
+  random_seed = flags.random_seed
+  if random_seed is not None and random_seed > 0:
+    utils.print_out("# Set random seed to %d" % random_seed)
+    random.seed(random_seed + jobid)
+    np.random.seed(random_seed + jobid)
 
-  sv = tf.train.Supervisor(logdir=train_dir,
-                     is_chief=True,
-                     saver=saver,
-                     summary_op=None,
-                     save_summaries_secs=60, # save summaries for tensorboard every 60 secs
-                     save_model_secs=60, # checkpoint every 60 secs
-                     global_step=model.global_step)
-  # summary_writer = sv.summary_writer
-  tf.logging.info("Preparing or waiting for session...")
-  sess_context_manager = sv.prepare_or_wait_for_session(config=util.get_config())
-  tf.logging.info("Created session.")
-  try:
-    run_training(model, sess_context_manager,train_dir) # this is an infinite loop until interrupted
-  except KeyboardInterrupt:
-    tf.logging.info("Caught keyboard interrupt on worker. Stopping supervisor...")
-    sv.stop()
+  ## Train / Decode
+  out_dir = flags.out_dir
+  if not tf.gfile.Exists(out_dir): tf.gfile.MakeDirs(out_dir)
 
+  # Load hparams.
+  hparams = create_or_load_hparams(
+      out_dir, default_hparams, flags.hparams_path, save_hparams=(jobid==0))
 
-def run_training(model, sess_context_manager,train_dir):
-  """Repeatedly runs training iterations, logging loss to screen and writing summaries"""
-  tf.logging.info("starting run_training")
+  if flags.inference_input_file:
+    # Inference indices
+    hparams.inference_indices = None
+    if flags.inference_list:
+      (hparams.inference_indices) = (
+          [int(token)  for token in flags.inference_list.split(",")])
 
-  with sess_context_manager as sess:
-    sess.run([model.init_iter])
-    if FLAGS.debug: # start the tensorflow debugger
-      sess = tf_debug.LocalCLIDebugWrapperSession(sess)
-      sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
-    while True: # repeats until interrupted
+    # Inference
+    trans_file = flags.inference_output_file
+    ckpt = flags.ckpt
+    if not ckpt:
+      ckpt = tf.train.latest_checkpoint(out_dir)
+    inference_fn(ckpt, flags.inference_input_file,
+                 trans_file, hparams, num_workers, jobid)
 
-      tf.logging.info('running training step...')
-      t0=time.time()
-      try:
-        results = model.train(sess)
-        # return sess.run([self.update,
-        #                  self.train_loss,
-        #                  self.predict_count,
-        #                  self.train_summary,
-        #                  self.global_step,
-        #                  self.word_count,
-        #                  self.batch_size])
-        summaries = results[3]  # we will write these summaries to tensorboard using summary_writer
-        train_step = results[4]  # we need this to update our running average loss
-      except tf.errors.OutOfRangeError:
-        # Finished going through the training dataset.  Go to next epoch.
-        epoch_step =+1
-        print(
-          "# Finished epoch: ",epoch_step, "step %d. Perform external evaluation" %train_step)
-        sess.run([model.init_iter])
-        continue
-
-      t1=time.time()
-      tf.logging.info('seconds for training step: %.3f', t1-t0)
-
-      loss = results[1]
-      tf.logging.info('loss: %f', loss) # print the loss to screen
-
-      if not np.isfinite(loss):
-        raise Exception("Loss is not finite. Stopping.")
-
-      # if FLAGS.coverage:
-      #   coverage_loss = results['coverage_loss']
-      #   tf.logging.info("coverage_loss: %f", coverage_loss) # print the coverage loss to screen
-
-      # get the summaries and iteration number so we can write summaries to tensorboard
-
-
-      # summary_writer.add_summary(summaries, train_step) # write the summaries
-      if train_step % 100 == 0: # flush the summary writer every so often
-        model.saver.save(
-          sess,
-          os.path.join(train_dir, "summarization.ckpt"),
-          global_step=model.global_step)
-        # summary_writer.flush()
-
-
-
+    # Evaluation
+    ref_file = flags.inference_ref_file
+    if ref_file and tf.gfile.Exists(trans_file):
+      for metric in hparams.metrics:
+        score = evaluation_utils.evaluate(
+            ref_file,
+            trans_file,
+            metric,
+            hparams.subword_option)
+        utils.print_out("  %s: %.1f" % (metric, score))
+  else:
+    # Train
+    hps=hparams
+    train_fn(hps, target_session=target_session)
 
 
 def main(unused_argv):
-  if len(unused_argv) != 1: # prints a message if you've entered flags incorrectly
-    raise Exception("Problem with flags: %s" % unused_argv)
-
-  tf.logging.set_verbosity(tf.logging.INFO) # choose what level of logging you want
-  tf.logging.info('Starting seq2seq_attention in %s mode...', (FLAGS.mode))
-
-  # Change log_root to FLAGS.log_root/FLAGS.exp_name and create the dir if necessary
-  FLAGS.log_root = os.path.join(FLAGS.log_root, FLAGS.exp_name)
-  if not os.path.exists(FLAGS.log_root):
-    if FLAGS.mode=="train":
-      os.makedirs(FLAGS.log_root)
-    else:
-      raise Exception("Logdir %s doesn't exist. Run in train mode to create it." % (FLAGS.log_root))
-
-  vocab = (FLAGS.vocab_path, FLAGS.vocab_size) # create a vocabulary
-
-  # If in decode mode, set batch_size = beam_size
-  # Reason: in decode mode, we decode one example at a time.
-  # On each step, we have beam_size-many hypotheses in the beam, so we need to make a batch of these hypotheses.
-  if FLAGS.mode == 'decode':
-    FLAGS.batch_size = FLAGS.beam_size
-
-  # If single_pass=True, check we're in decode mode
+  default_hparams = create_hparams(FLAGS)
+  train_fn = train.train
+  inference_fn = inference.inference
+  run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
 
-  # Make a namedtuple hps, containing the values of the hyperparameters that the model needs
-  hps_dict = {}
-  for key,val in FLAGS.__flags.items(): # for each flag
-    # if key in hparam_list: # if it's in the list
-    hps_dict[key] = val # add it to the dict
-  hps = namedtuple("HParams", hps_dict.keys())(**hps_dict)
-
-  # Create a batcher object that will create minibatches of data
-  # batcher = Batcher(FLAGS.data_path, vocab, hps, single_pass=FLAGS.single_pass)
-
-  train_dataset = tf.data.TextLineDataset.from_tensor_slices(train_filenames)
-
-  train_dataset = train_dataset.map(lambda filename: tf.py_func(read_file, [filename], [tf.string, tf.string]))
-
-  test_dataset = tf.data.TextLineDataset.from_tensor_slices(test_filenames)
-  test_dataset = test_dataset.map(lambda filename: tf.py_func(read_file, [filename], [tf.string, tf.string]))
-
-  val_dataset = tf.data.TextLineDataset.from_tensor_slices(test_filenames)
-  val_dataset = val_dataset.map(lambda filename: tf.py_func(read_file, [filename], [tf.string, tf.string]))
+if __name__ == "__main__":
+  nmt_parser = argparse.ArgumentParser()
+  add_arguments(nmt_parser)
+  FLAGS, unparsed = nmt_parser.parse_known_args()
+  tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
 
 
 
-  # it = dataset.make_one_shot_iterator()
-  # x_it = it.get_next()
-  vocab_table = data.create_vocab_tables(vocab_file, hps.vocab_size)
-  reverse_vocab_table = data.create_id_tables(vocab_file, hps.vocab_size)
-
-
-
-  tf.set_random_seed(111) # a seed value for randomness
-
-  if hps.mode == 'train':
-    print("creating model...")
-    iterator = data.get_iterator(train_dataset, vocab_table, hps)
-    # init = iterator.initializer
-
-
-
-    model = SummarizationModel(iterator,hps,hps.mode,vocab_table,reverse_vocab_table)
-    setup_training(hps,model)
-
-  elif hps.mode == 'decode':
-    train_dir = os.path.join(FLAGS.log_root, "train")
-
-    iterator = data.get_iterator(val_dataset, vocab_table, hps)
-    # init = iterator.initializer
-    ckpt_state = tf.train.get_checkpoint_state(train_dir)
-
-
-    tf.logging.info('Loading checkpoint %s', ckpt_state.model_checkpoint_path)
-
-    model = SummarizationModel(iterator,hps,tf.contrib.learn.ModeKeys.INFER,vocab_table,reverse_vocab_table)
-    sess = tf.Session(config=util.get_config())
-    saver =tf.train.Saver()
-    saver.restore(sess, ckpt_state.model_checkpoint_path)
-    sess.run(tf.tables_initializer())
-
-    sess.run([model.init_iter])
-    start_time = time.time()
-    num_sentences = 0
-    num_translations_per_input=1
-    while True:
-      try:
-        nmt_outputs, _ = model.decode(sess)
-
-        batch_size = nmt_outputs.shape[1]
-        num_sentences += batch_size
-
-        for sent_id in range(batch_size):
-          for beam_id in range(num_translations_per_input):
-            translation = get_translation(
-              nmt_outputs[beam_id],
-              sent_id,
-              tgt_eos=hps.STOP_DECODING,
-              subword_option="bpe")
-            print((translation + b"\n").decode("utf-8"))
-      except tf.errors.OutOfRangeError:
-        utils.print_time(
-          "  done, num sentences %d, num translations per input %d" %
-          (num_sentences, num_translations_per_input), start_time)
-        break
-
-  else:
-    raise ValueError("The 'mode' flag must be one of train/eval/decode")
-def get_translation(nmt_outputs, sent_id, tgt_eos, subword_option):
-  """Given batch decoding outputs, select a sentence and turn to text."""
-  if tgt_eos: tgt_eos = tgt_eos.encode("utf-8")
-  # Select a sentence
-  output = nmt_outputs[sent_id, :].tolist()
-
-  # If there is an eos symbol in outputs, cut them at that point.
-  if tgt_eos and tgt_eos in output:
-    output = output[:output.index(tgt_eos)]
-
-  if subword_option == "bpe":  # BPE
-    translation = utils.format_bpe_text(output)
-  elif subword_option == "spm":  # SPM
-    translation = utils.format_spm_text(output)
-  else:
-    translation = utils.format_text(output)
-
-  return translation
-if __name__ == '__main__':
-  tf.app.run()
