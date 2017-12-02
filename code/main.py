@@ -18,8 +18,8 @@ import tensorflow as tf
 
 import inference
 import train
-import evaluation_utils
-import misc_utils as utils
+from util import evaluation_utils
+from util import misc_utils as utils
 import data
 import vocab_utils
 # from .util import vocab_utils
