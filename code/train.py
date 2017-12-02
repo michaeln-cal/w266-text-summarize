@@ -27,7 +27,7 @@ import data
 from model import Model
 from attention_model import AttentionModel
 
-import misc_utils as utils
+from util import misc_utils as utils
 
 utils.check_tensorflow_version()
 

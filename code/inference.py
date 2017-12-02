@@ -24,7 +24,7 @@ import tensorflow as tf
 from model import Model
 from attention_model import AttentionModel
 
-import misc_utils as utils
+from util import misc_utils as utils
 
 __all__ = ["load_data", "inference",
            "single_worker_inference", "multi_worker_inference"]

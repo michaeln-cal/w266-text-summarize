@@ -2,10 +2,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
-import struct
-from tensorflow.core.example import example_pb2
 import os
+import argparse
+import datetime
+import struct
+import numpy as np
+from tensorflow.core.example import example_pb2
+
 SENTENCE_START = '<s>'
 SENTENCE_END = '</s>'
 
@@ -58,7 +61,11 @@ def read_abstract_file(filename):
         str_len = struct.unpack('q', len_bytes)[0]
         example_str = struct.unpack('%ds' % str_len, reader.read(str_len))[0]
         example = example_pb2.Example.FromString(example_str)
-        abstract_text.append(abstract2sents(str(example.features.feature['abstract'].bytes_list.value[0]),SENTENCE_START, SENTENCE_END)) # the abstract text was saved under the key 'abstract' in the data files
+        abstract_text.append(
+                abstract2sents(
+                    str(example.features.feature['abstract'].bytes_list.value[0]),
+                    SENTENCE_START,
+                    SENTENCE_END)) # the abstract text was saved under the key 'abstract' in the data files
 
     return abstract_text
 
@@ -71,18 +78,58 @@ def write_file(write_dir, filename,data):
 
 
 if __name__ == '__main__':
-    data_dir ='/Users/giang/Downloads/finished_files/chunked'
-    target_dir= '/Users/giang/PycharmProjects/w266-text-summarize/data'
-    vocab_file='/Users/giang/Downloads/finished_files/vocab_copy'
+    parser = argparse.ArgumentParser(description='Process some integers.')
 
+    parser.add_argument('--data_dir', metavar='dir',
+            default='../data/cnn-dailymail/finished_files',
+            help='directory for input data (finished_files)')
+
+    parser.add_argument('--out_dir', metavar='dir',
+            default='../output',
+            help='directory for output data')
+
+    args = parser.parse_args()
+
+    print("Running create_data: ", datetime.datetime.now())
+
+    #finished_files='../data/cnn-dailymail/finished_files/'
+    finished_files = args.data_dir
+    data_dir = finished_files + '/chunked'
+    vocab_file= finished_files + '/vocab'
+
+    #target_dir= '../output/'
+    target_dir = args.out_dir
+    target_article_dir= target_dir + '/article'
+    target_abstract_dir= target_dir + '/abstract'
+    target_vocab_dir= target_dir + '/vocab'
+
+    #data_dir ='/Users/giang/Downloads/finished_files/chunked'
+    #target_dir= '/Users/giang/PycharmProjects/w266-text-summarize/data'
+    #vocab_file='/Users/giang/Downloads/finished_files/vocab_copy'
+
+    print("Checking inputs/outputs:")
+    can_continue = True
+    for f in (data_dir, vocab_file, target_dir):
+        found = "[ found ]" if os.path.exists(f) else "[missing]"
+        can_continue = can_continue and os.path.exists(f)
+        print("\t {} \t {}".format(found, f))
+
+    if not can_continue:
+        raise ValueError('Unable to find required directories/files. Exiting...')
+
+    for subdir in (target_abstract_dir, target_article_dir, target_vocab_dir):
+        if os.path.exists(subdir):
+            print("** warning: directory already exists: ", subdir)
+        else:
+            print("creating output directory: ", subdir)
+            os.mkdir(subdir)
+
+    print("continuing...")
 
     for file in os.listdir(data_dir):
         if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
-
-            write_file(target_dir+'/article',file,read_article_file(data_dir+'/'+file))
-            write_file(target_dir+'/abstract',file,read_abstract_file(data_dir+'/'+file))
-
-
+            write_file(target_article_dir, file, read_article_file(data_dir+'/'+file))
+            write_file(target_abstract_dir, file, read_abstract_file(data_dir+'/'+file))
 
     vocab = []
     with open(vocab_file, 'r') as vocab_f:
@@ -90,7 +137,6 @@ if __name__ == '__main__':
             pieces = line.split()
             vocab.append(pieces[0])
 
-
     vocab = np.unique(np.array(vocab))
     np.random.shuffle(vocab)
-    write_file(target_dir+'/vocab','vocab',vocab)
+    write_file(target_vocab_dir,'vocab',vocab)
