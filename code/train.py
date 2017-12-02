@@ -51,7 +51,7 @@ def run_sample_decode(infer_model, infer_sess, model_dir, hps,
 
 def run_internal_eval(
     eval_model, eval_sess, model_dir, hps, summary_writer,
-    use_test_set=True):
+    use_test_set=False):
   """Compute internal evaluation (perplexity) for both dev / test."""
   with eval_model.graph.as_default():
     loaded_eval_model, global_step = model_helper.create_or_load_model(

@@ -75,12 +75,12 @@ if __name__ == '__main__':
     target_dir= '/Users/giang/PycharmProjects/w266-text-summarize/data'
     vocab_file='/Users/giang/Downloads/finished_files/vocab_copy'
 
-
-    for file in os.listdir(data_dir):
-        if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
-
-            write_file(target_dir+'/article',file,read_article_file(data_dir+'/'+file))
-            write_file(target_dir+'/abstract',file,read_abstract_file(data_dir+'/'+file))
+    #
+    # for file in os.listdir(data_dir):
+    #     if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
+    #
+    #         write_file(target_dir+'/article',file,read_article_file(data_dir+'/'+file))
+    #         write_file(target_dir+'/abstract',file,read_abstract_file(data_dir+'/'+file))
 
 
 
@@ -93,4 +93,5 @@ if __name__ == '__main__':
 
     vocab = np.unique(np.array(vocab))
     np.random.shuffle(vocab)
+    vocab= vocab[:20000]
     write_file(target_dir+'/vocab','vocab',vocab)

@@ -21,6 +21,9 @@ import tensorflow as tf
 
 import model
 import model_helper
+from coverage_model import CoverageAttentionWrapper
+from coverage_model import CoverageBahdanauAttention
+
 
 __all__ = ["AttentionModel"]
 
@@ -109,11 +112,11 @@ class AttentionModel(model.Model):
     # Only generate alignment in greedy INFER mode.
     alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
                          beam_width == 0)
-    cell = tf.contrib.seq2seq.AttentionWrapper(
+    cell = CoverageAttentionWrapper(
         cell,
         attention_mechanism,
         attention_layer_size=num_units,
-        alignment_history=alignment_history,
+        alignment_history=True,
         output_attention=hps.output_attention,
         name="attention")
 
@@ -156,6 +159,12 @@ def create_attention_mechanism(attention_option, num_units, memory,
         num_units, memory, memory_sequence_length=source_sequence_length)
   elif attention_option == "normed_bahdanau":
     attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
+        num_units,
+        memory,
+        memory_sequence_length=source_sequence_length,
+        normalize=True)
+  elif attention_option == "coverage_bahdanau":
+    attention_mechanism = CoverageBahdanauAttention(
         num_units,
         memory,
         memory_sequence_length=source_sequence_length,

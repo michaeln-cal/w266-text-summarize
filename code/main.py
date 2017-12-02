@@ -35,7 +35,7 @@ def add_arguments(parser):
   parser.add_argument("--num_units", type=int, default=32, help="Network size.")
   parser.add_argument("--num_layers", type=int, default=2,
                       help="Network depth.")
-  parser.add_argument("--encoder_type", type=str, default="uni", help="""\
+  parser.add_argument("--encoder_type", type=str, default="bi", help="""\
       uni | bi | gnmt. For bi, we build num_layers/2 bi-directional layers.For
       gnmt, we build 1 bi-directional layer, and (num_layers - 1) uni-
       directional layers.\
