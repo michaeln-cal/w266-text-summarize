@@ -14,9 +14,9 @@ test_tgt_file=$data_dir/abstract/test_000.bin
 dev_src_file=$data_dir/article/val_000.bin
 test_src_file=$data_dir/article/test_000.bin
 
-num_train_steps=20
-steps_per_stats=5
-vocab_size=600
+num_train_steps=12000
+steps_per_stats=100
+vocab_size=60000
 
 mkdir -p "$out_dir"
 
