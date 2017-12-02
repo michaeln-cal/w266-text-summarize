@@ -1,11 +1,10 @@
 #!/bin/bash
 
-data_dir=../output
-out_dir=../output/result
+# first arg is output base directory
+[ $# -eq 0 ] && base_dir='../output' || base_dir="$1"
 
-#vocab_file=data/cnn-dailymail/finished_files/vocab
-#test_src_file=data/cnn-dailymail/finished_files/chunked/test_000.bin
-#dev_src_file=data/cnn-dailymail/finished_files/chunked/val_000.bin
+data_dir=$base_dir
+out_dir=$data_dir/result
 
 vocab_file=$data_dir/vocab/vocab
 
@@ -18,6 +17,8 @@ test_src_file=$data_dir/article/test_000.bin
 num_train_steps=20
 steps_per_stats=5
 vocab_size=600
+
+mkdir -p "$out_dir"
 
 time python3 -u main.py   \
  --attention=scaled_luong \
@@ -42,10 +43,8 @@ time python3 -u main.py   \
 
 
 
-#
-#    this is the param to run:
-#    /usr/bin/python3
-#    -u  /root/text_sum/code/main.py
+# original example:
+#  /usr/bin/python3 -u  /root/text_sum/code/main.py
 #    --attention=scaled_luong
 #    --num_train_steps=12000
 #    --steps_per_stats=100
