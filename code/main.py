@@ -18,9 +18,8 @@ import tensorflow as tf
 
 import inference
 import train
-import evaluation_utils
-import misc_utils as utils
-import data
+import util.evaluation_utils as evaluation_utils
+import util.misc_utils as utils
 import vocab_utils
 # from .util import vocab_utils
 
@@ -44,7 +43,7 @@ def add_arguments(parser):
                       default=False,
                       help="Whether to add residual connections.")
   parser.add_argument("--time_major", type="bool", nargs="?", const=True,
-                      default=True,
+                      default=False,
                       help="Whether to use time-major mode for dynamic RNN.")
   parser.add_argument("--num_embeddings_partitions", type=int, default=0,
                       help="Number of partitions for embedding vars.")
@@ -81,7 +80,12 @@ def add_arguments(parser):
       Whether to pass encoder's hidden state to decoder when using an attention
       based model.\
       """)
-
+  parser.add_argument(
+      "--pointer_gen", type="bool", nargs="?", const=True,
+      default=False,
+      help="""\
+      Whether to activate pointer gen model\
+      """)
   # optimizer
   parser.add_argument("--optimizer", type=str, default="sgd", help="sgd | adam")
   parser.add_argument("--learning_rate", type=float, default=1.0,
@@ -175,7 +179,7 @@ def add_arguments(parser):
   # Sequence lengths
   parser.add_argument("--src_max_len", type=int, default=400,
                       help="Max length of src sequences during training.")
-  parser.add_argument("--tgt_max_len", type=int, default=150,
+  parser.add_argument("--tgt_max_len", type=int, default=145,
                       help="Max length of tgt sequences during training.")
   parser.add_argument("--src_max_len_infer", type=int, default=None,
                       help="Max length of src sequences during inference.")
@@ -196,7 +200,7 @@ def add_arguments(parser):
                       help="Clip gradients to this norm.")
   parser.add_argument("--source_reverse", type="bool", nargs="?", const=True,
                       default=False, help="Reverse source sequence.")
-  parser.add_argument("--batch_size", type=int, default=30, help="Batch size.")
+  parser.add_argument("--batch_size", type=int, default=40, help="Batch size.")
 
   parser.add_argument("--steps_per_stats", type=int, default=100,
                       help=("How many training steps to do per stats logging."
@@ -359,6 +363,8 @@ def create_hparams(flags):
       log_device_placement=flags.log_device_placement,
       random_seed=flags.random_seed,
       override_loaded_hparams=flags.override_loaded_hparams,
+      pointer_gen=flags.pointer_gen,
+
   )
 
 
@@ -494,7 +500,10 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
             trans_file,
             metric,
             hparams.subword_option)
-        utils.print_out("  %s: %.1f" % (metric, score))
+        if len(score)==3:
+            utils.print_out("  %s: r1-f %.1f ,r2-f %.1f ,rl-f %.1f " % (metric, score[0],score[1], score[2]))
+        else:
+            utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
     hps=hparams

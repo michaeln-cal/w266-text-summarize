@@ -207,9 +207,9 @@ def get_iterator(dataset,
             # these have unknown-length vectors.  The last two entries are
             # the source and target row sizes; these are scalars.
             padded_shapes=(
-                tf.TensorShape([None]),  # src
-                tf.TensorShape([None]),  # tgt_input
-                tf.TensorShape([None]),  # tgt_output
+                tf.TensorShape([400]),  # src
+                tf.TensorShape([150]),  # tgt_input
+                tf.TensorShape([150]),  # tgt_output
                 tf.TensorShape([]),  # src_len
                 tf.TensorShape([])),  # tgt_len
             # Pad the source and target sequences with eos tokens.

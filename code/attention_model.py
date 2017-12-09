@@ -21,9 +21,6 @@ import tensorflow as tf
 
 import model
 import model_helper
-from coverage_model import CoverageAttentionWrapper
-from coverage_model import CoverageBahdanauAttention
-
 
 __all__ = ["AttentionModel"]
 
@@ -66,9 +63,9 @@ class AttentionModel(model.Model):
     attention_option = hps.attention
     attention_architecture = hps.attention_architecture
 
-    if attention_architecture != "standard":
-      raise ValueError(
-          "Unknown attention architecture %s" % attention_architecture)
+    # if attention_architecture != "standard":
+    #   raise ValueError(
+    #       "Unknown attention architecture %s" % attention_architecture)
 
     num_units = hps.num_units
     num_layers = hps.num_layers
@@ -112,11 +109,11 @@ class AttentionModel(model.Model):
     # Only generate alignment in greedy INFER mode.
     alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
                          beam_width == 0)
-    cell = CoverageAttentionWrapper(
+    cell = tf.contrib.seq2seq.AttentionWrapper(
         cell,
         attention_mechanism,
         attention_layer_size=num_units,
-        alignment_history=True,
+        alignment_history=alignment_history,
         output_attention=hps.output_attention,
         name="attention")
 
@@ -159,12 +156,6 @@ def create_attention_mechanism(attention_option, num_units, memory,
         num_units, memory, memory_sequence_length=source_sequence_length)
   elif attention_option == "normed_bahdanau":
     attention_mechanism = tf.contrib.seq2seq.BahdanauAttention(
-        num_units,
-        memory,
-        memory_sequence_length=source_sequence_length,
-        normalize=True)
-  elif attention_option == "coverage_bahdanau":
-    attention_mechanism = CoverageBahdanauAttention(
         num_units,
         memory,
         memory_sequence_length=source_sequence_length,

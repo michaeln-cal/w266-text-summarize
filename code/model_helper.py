@@ -7,7 +7,7 @@ import collections
 import tensorflow as tf
 
 import data
-import misc_utils as utils
+import util.misc_utils as utils
 
 __all__ = [
     "get_initializer", "get_device_str",
@@ -208,7 +208,7 @@ def _single_cell(unit_type, num_units, forget_bias, dropout, mode,
   # Cell Type
   if unit_type == "lstm":
     utils.print_out("  LSTM, forget_bias=%g" % forget_bias, new_line=False)
-    single_cell = tf.contrib.rnn.BasicLSTMCell(
+    single_cell = tf.contrib.rnn.LSTMCell(
         num_units,
         forget_bias=forget_bias)
   elif unit_type == "gru":

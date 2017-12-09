@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.layers import core as layers_core
 import model_helper
-import misc_utils as utils
+from util import misc_utils as utils
 
 
 
@@ -49,10 +49,18 @@ class Model(object):
              self.word_count = tf.reduce_sum(
                  self.iterator.source_sequence_length) + tf.reduce_sum(
                  self.iterator.target_sequence_length)
+             if (len(res)>4):
+                 self.coverage_loss = res[4]
+             else:
+                 self.coverage_loss=tf.constant(0)
          elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
              self.eval_loss = res[1]
          elif self.mode == tf.contrib.learn.ModeKeys.INFER:
-             self.infer_logits, _, self.final_context_state, self.sample_id = res
+             if (len(res)>4):
+                 self.infer_logits, _, self.final_context_state, self.sample_id,_ = res
+             else:
+                 self.infer_logits, _, self.final_context_state, self.sample_id = res
+
              self.sample_words = reverse_target_vocab_table.lookup(
                  tf.to_int64(self.sample_id))
 
@@ -97,9 +105,18 @@ class Model(object):
 
              # Summary
              # Summary
-             self.train_summary = tf.summary.merge([
+             if(self.coverage_loss is not None):
+                 self.train_summary = tf.summary.merge([
+                                                           tf.summary.scalar("lr", self.learning_rate),
+                                                           tf.summary.scalar("train_loss", self.train_loss),
+                                                           tf.summary.scalar("coverage_loss", self.coverage_loss)
+
+                                                       ] + grad_norm_summary)
+             else:
+                 self.train_summary = tf.summary.merge([
                                                        tf.summary.scalar("lr", self.learning_rate),
-                                                       tf.summary.scalar("train_loss", self.train_loss),
+                                                       tf.summary.scalar("train_loss", self.train_loss)
+
                                                    ] + grad_norm_summary)
          if self.mode == tf.contrib.learn.ModeKeys.INFER:
              self.infer_summary = self._get_infer_summary(hps)
@@ -113,13 +130,6 @@ class Model(object):
              utils.print_out("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                                param.op.device))
 
-    # def init_embeddings(self, hps):
-    #     """Init embeddings."""
-    #
-    #     embedding = tf.get_variable('embedding', [self.hps.vocab_size, self.hps.emb_dim], dtype=tf.float32,
-    #                                     initializer=self.trunc_norm_init)
-    #
-    #     self.embedding_encoder, self.embedding_decoder =embedding,embedding
 
     def init_embeddings(self, hparams, scope):
         """Init embeddings."""
@@ -513,7 +523,8 @@ class Model(object):
                          self.word_count,
                          self.batch_size,
                          self.grad_norm,
-                         self.learning_rate])
+                         self.learning_rate,
+                         self.coverage_loss])
 
     def infer(self, sess):
         assert self.mode == tf.contrib.learn.ModeKeys.INFER

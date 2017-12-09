@@ -26,7 +26,7 @@ import collections
 import numpy as np
 import os
 import tensorflow as tf
-import evaluation_utils
+import util.evaluation_utils as evaluation_utils
 UNK = "<unk>"
 SOS = "<s>"
 EOS = "</s>"
@@ -149,11 +149,12 @@ def get_config_proto(log_device_placement=False, allow_soft_placement=True):
 
 
 def format_text(words):
-  """Convert a sequence words into sentence."""
+  # """Convert a sequence words into sentence."""
   if (not hasattr(words, "__len__") and  # for numpy array
       not isinstance(words, collections.Iterable)):
     words = [words]
   return b" ".join(words)
+  # return words
 
 
 def format_bpe_text(symbols, delimiter=b"@@"):
@@ -235,7 +236,7 @@ def decode_and_evaluate(name,
           metric,
           subword_option=subword_option)
       evaluation_scores[metric] = score
-      print_out("  %s %s: %.1f" % (metric, name, score))
+      print_out("  %s %s: %.1f %.1f %.1f" % (metric, name, score[0], score[1], score[2]))
 
   return evaluation_scores
 

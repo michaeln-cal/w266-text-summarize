@@ -24,10 +24,10 @@ import os
 import random
 import tensorflow as tf
 import data
-from model import Model
 from attention_model import AttentionModel
+from coverage_pointer_model import CoveragePointerModel
 
-import misc_utils as utils
+from util import misc_utils as utils
 
 utils.check_tensorflow_version()
 
@@ -156,7 +156,7 @@ def init_stats():
 def update_stats(stats, summary_writer, start_time, step_result):
   """Update stats: write summary and accumulate statistics."""
   (_, step_loss, step_predict_count, step_summary, global_step,
-   step_word_count, batch_size, grad_norm, learning_rate) = step_result
+   step_word_count, batch_size, grad_norm, learning_rate, step_coverage_loss) = step_result
 
   # Write step summary.
   summary_writer.add_summary(step_summary, global_step)
@@ -168,6 +168,8 @@ def update_stats(stats, summary_writer, start_time, step_result):
   stats["total_count"] += float(step_word_count)
   stats["grad_norm"] += grad_norm
   stats["learning_rate"] = learning_rate
+  stats["step_coverage_loss"] = step_coverage_loss
+
 
   return global_step
 
@@ -179,12 +181,16 @@ def check_stats(stats, global_step, steps_per_stats, hps, log_f):
   avg_grad_norm = stats["grad_norm"] / steps_per_stats
   train_ppl = utils.safe_exp(
       stats["loss"] / stats["predict_count"])
+  coverage_loss =   stats["step_coverage_loss"]
+  loss =   stats["loss"]
+
+
   speed = stats["total_count"] / (1000 * stats["step_time"])
   utils.print_out(
       "  global step %d lr %g "
-      "step-time %.2fs wps %.2fK ppl %.2f gN %.2f %s" %
+      "step-time %.2fs wps %.2fK ppl %.2f cov_loss %.2f loss %.2f gN %.2f %s" %
       (global_step, stats["learning_rate"],
-       avg_step_time, speed, train_ppl, avg_grad_norm,
+       avg_step_time, speed, train_ppl,coverage_loss,loss, avg_grad_norm,
        _get_best_results(hps)),
       log_f)
 
@@ -208,10 +214,13 @@ def train(hps, scope=None, target_session=""):
   if not steps_per_external_eval:
     steps_per_external_eval = 5 * steps_per_eval
 
-  if not hps.attention:
-      model_creator = Model
-  else:
+  if hps.attention_architecture == "baseline":
       model_creator= AttentionModel
+  else:
+      model_creator= CoveragePointerModel
+
+
+
 
   train_model = model_helper.create_train_model(model_creator, hps, scope)
   eval_model = model_helper.create_eval_model(model_creator, hps, scope)
@@ -353,8 +362,8 @@ def train(hps, scope=None, target_session=""):
       # Evaluate on dev/test
       run_sample_decode(infer_model, infer_sess,
                         model_dir, hps, summary_writer,sample_src_data, sample_tgt_data)
-      dev_ppl, test_ppl = run_internal_eval(
-          eval_model, eval_sess, model_dir, hps, summary_writer)
+      # dev_ppl, test_ppl = run_internal_eval(
+      #     eval_model, eval_sess, model_dir, hps, summary_writer)
 
     if global_step - last_external_eval_step >= steps_per_external_eval:
       last_external_eval_step = global_step
@@ -462,9 +471,9 @@ def _sample_decode(model, global_step, sess, hps, iterator,src_data,tgt_data,ite
       tgt_eos=hps.eos,
       subword_option=hps.subword_option)
 
-  utils.print_out("    src: " + src_data[decode_id])
-  utils.print_out("    ref: " + tgt_data[decode_id])
-  utils.print_out(b"    summarized: " + translation)
+  utils.print_out("    Source: " + src_data[decode_id])
+  utils.print_out("    Ref. summary: " + tgt_data[decode_id])
+  utils.print_out(b"   Model summary: " + translation)
 
   # Summary
   if attention_summary is not None:

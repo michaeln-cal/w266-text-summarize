@@ -21,8 +21,8 @@ import subprocess
 
 import tensorflow as tf
 
-import bleu
-import rouge
+import util.bleu as bleu
+import util.rouge as rouge
 
 
 __all__ = ["evaluate"]
@@ -111,7 +111,7 @@ def _rouge(ref_file, summarization_file, subword_option=None):
       hypotheses.append(_clean(line, subword_option=None))
 
   rouge_score_map = rouge.rouge(hypotheses, references)
-  return 100 * rouge_score_map["rouge_l/f_score"]
+  return (100 * rouge_score_map["rouge_1/f_score"],100 * rouge_score_map["rouge_2/f_score"],100 * rouge_score_map["rouge_l/f_score"])
 
 
 def _accuracy(label_file, pred_file):

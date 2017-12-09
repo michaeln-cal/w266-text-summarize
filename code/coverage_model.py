@@ -54,53 +54,7 @@ from tensorflow.contrib.seq2seq.python.ops.attention_wrapper import _BaseAttenti
 
 
 class CoverageAttentionWrapper(AttentionWrapper):
-    def zero_state(self, batch_size, dtype):
-        """Return an initial (zero) state tuple for this `AttentionWrapper`.
-        **NOTE** Please see the initializer documentation for details of how
-        to call `zero_state` if using an `AttentionWrapper` with a
-        `BeamSearchDecoder`.
-        Args:
-          batch_size: `0D` integer tensor: the batch size.
-          dtype: The internal state data type.
-        Returns:
-          An `AttentionWrapperState` tuple containing zeroed out tensors and,
-          possibly, empty `TensorArray` objects.
-        Raises:
-          ValueError: (or, possibly at runtime, InvalidArgument), if
-            `batch_size` does not match the output size of the encoder passed
-            to the wrapper object at initialization time.
-        """
-        with ops.name_scope(type(self).__name__ + "ZeroState", values=[batch_size]):
-            if self._initial_cell_state is not None:
-                cell_state = self._initial_cell_state
-            else:
-                cell_state = self._cell.zero_state(batch_size, dtype)
-            error_message = (
-                    "When calling zero_state of AttentionWrapper %s: " % self._base_name +
-                    "Non-matching batch sizes between the memory "
-                    "(encoder output) and the requested batch size.  Are you using "
-                    "the BeamSearchDecoder?  If so, make sure your encoder output has "
-                    "been tiled to beam_width via tf.contrib.seq2seq.tile_batch, and "
-                    "the batch_size= argument passed to zero_state is "
-                    "batch_size * beam_width.")
-            with ops.control_dependencies(
-                    self._batch_size_checks(batch_size, error_message)):
-                cell_state = nest.map_structure(
-                    lambda s: array_ops.identity(s, name="checked_cell_state"),
-                    cell_state)
-            return AttentionWrapperState(
-                cell_state=cell_state,
-                time=array_ops.zeros([], dtype=dtypes.int32),
-                attention=_zero_state_tensors(self._attention_layer_size, batch_size,
-                                              dtype),
-                alignments=self._item_or_tuple(
-                    attention_mechanism.initial_alignments(batch_size, dtype)
-                    for attention_mechanism in self._attention_mechanisms),
-                alignment_history=self._item_or_tuple(
-                    tensor_array_ops.TensorArray(dtype=dtype, size=0,
-                                                 dynamic_size=True)
-                    if self._alignment_history else ()
-                    for _ in self._attention_mechanisms))
+
     def call(self, inputs, state):
         """Perform a step of attention-wrapped RNN.
         - Step 1: Mix the `inputs` and previous step's `attention` output via
@@ -159,7 +113,8 @@ class CoverageAttentionWrapper(AttentionWrapper):
 
         history = previous_alignment_history[0]
         history.clear_after_read =False
-        history = tf.cond(history.size()>0,lambda : history.stack(),
+
+        history = tf.cond(history.size()>0,lambda : history.read(0),
                           lambda :tf.zeros([1,30,400], dtypes.float32))
         all_alignments = []
         all_attentions = []
@@ -272,13 +227,13 @@ def _bahdanau_coverage_score(processed_query,alignment_history, keys, normalize)
   c = variable_scope.get_variable(
       "coverage_c", [400,num_units], dtype=dtype)
   history = alignment_history
-  history_sum= math_ops.reduce_sum(history,[0])
+  # history_sum= math_ops.reduce_sum(history,[0])
 
 
   #expand history into [batch,1, max_time]
   # history_sum_expanded =array_ops.expand_dims(history_sum, 1)
   #now become [batch,max_time,num_units]
-  coverage_features =  math_ops.matmul(history_sum,c)
+  coverage_features =  math_ops.matmul(history,c)
   coverage_features = array_ops.expand_dims(coverage_features, 1)
   if normalize:
     # Scalar used in weight normalization

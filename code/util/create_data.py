@@ -3,6 +3,8 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
+import pandas as pd
+
 import struct
 from tensorflow.core.example import example_pb2
 import os
@@ -72,10 +74,10 @@ def write_file(write_dir, filename,data):
 
 if __name__ == '__main__':
     data_dir ='/Users/giang/Downloads/finished_files/chunked'
-    target_dir= '/Users/giang/PycharmProjects/w266-text-summarize/data'
-    vocab_file='/Users/giang/Downloads/finished_files/vocab_copy'
+    target_dir= '../../data/vocab'
+    vocab_file='../../data/vocab/vocab_original'
 
-    #
+
     # for file in os.listdir(data_dir):
     #     if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
     #
@@ -84,14 +86,11 @@ if __name__ == '__main__':
 
 
 
-    vocab = []
-    with open(vocab_file, 'r') as vocab_f:
-        for line in vocab_f:
-            pieces = line.split()
-            vocab.append(pieces[0])
 
 
-    vocab = np.unique(np.array(vocab))
-    np.random.shuffle(vocab)
-    vocab= vocab[:20000]
-    write_file(target_dir+'/vocab','vocab',vocab)
+
+    vocab=pd.read_csv(vocab_file,header=None,sep=" ")
+    vocab=vocab.drop_duplicates()
+    vocab=vocab.dropna()
+    vocab = vocab.nlargest(150000,[1])
+    vocab.to_csv(target_dir+"/vocab", columns=[0], index=False, header=False)
