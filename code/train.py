@@ -421,7 +421,7 @@ def _format_results(name, ppl, scores, metrics):
   result_str = "%s ppl %.2f" % (name, ppl)
   if scores:
     for metric in metrics:
-      result_str += ", %s %s %.1f" % (name, metric, scores[metric])
+      result_str += ", %s %s %.1f" % (name, metric, scores[metric][2])
   return result_str
 
 
@@ -507,10 +507,10 @@ def _external_eval(model, global_step, sess, hps, iterator,
   if decode:
     for metric in hps.metrics:
       utils.add_summary(summary_writer, global_step, "%s_%s" % (label, metric),
-                        scores[metric])
+                        scores[metric][2])
       # metric: larger is better
-      if save_on_best and scores[metric] > getattr(hps, "best_" + metric):
-        setattr(hps, "best_" + metric, scores[metric])
+      if save_on_best and scores[metric][2] > getattr(hps, "best_" + metric):
+        setattr(hps, "best_" + metric, scores[metric][2])
         model.saver.save(
             sess,
             os.path.join(
