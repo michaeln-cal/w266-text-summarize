@@ -249,7 +249,7 @@ def add_arguments(parser):
   parser.add_argument("--inference_list", type=str, default=None,
                       help=("A comma-separated list of sentence indices "
                             "(0-based) to decode."))
-  parser.add_argument("--infer_batch_size", type=int, default=32,
+  parser.add_argument("--infer_batch_size", type=int, default=40,
                       help="Batch size for inference mode.")
   parser.add_argument("--inference_output_file", type=str, default=None,
                       help="Output file to store decoding results.")
