@@ -75,7 +75,7 @@ def write_file(filename, data):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Pre-pocess input data.')
+    parser = argparse.ArgumentParser(description='Pre-process input data.')
 
     # default output directories:
     #   vocab file:  ../output/vocab
@@ -146,10 +146,10 @@ if __name__ == '__main__':
     print("...processing articles to : %s" % target_article_dir)
     print("...processing abstracts to: %s" % target_abstract_dir)
 
-    #for filename in os.listdir(input_data_dir):
-    #    if filename.startswith('val_') or filename.startswith('train_')or filename.startswith('test_') :
-    #        write_file(join(target_article_dir, filename), read_article_file(join(input_data_dir, filename)))
-    #        write_file(join(target_abstract_dir, filename), read_abstract_file(join(input_data_dir, filename)))
+    for filename in os.listdir(input_data_dir):
+        if filename.startswith('val_') or filename.startswith('train_')or filename.startswith('test_') :
+            write_file(join(target_article_dir, filename), read_article_file(join(input_data_dir, filename)))
+            write_file(join(target_abstract_dir, filename), read_abstract_file(join(input_data_dir, filename)))
 
     print("...reading original vocab file (limit: %s): %s" % (args.vocab_max_num, input_vocab_file))
     df=pd.read_csv(input_vocab_file, header=None, sep=" ")
