@@ -26,7 +26,7 @@ import collections
 import numpy as np
 import os
 import tensorflow as tf
-import util.evaluation_utils as evaluation_utils
+from util import evaluation_utils
 UNK = "<unk>"
 SOS = "<s>"
 EOS = "</s>"

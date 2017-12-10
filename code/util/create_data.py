@@ -76,8 +76,8 @@ if __name__ == '__main__':
     data_dir ='/Users/giang/Downloads/finished_files/chunked'
     target_dir= '../../data/vocab'
     vocab_file='../../data/vocab/vocab_original'
-    #
-    #
+
+
     # for file in os.listdir(data_dir):
     #     if file.startswith('val_') or file.startswith('train_')or file.startswith('test_') :
     #

@@ -1,0 +1,2 @@
+85ac23a1926a831e8f46a6b8eaf57263  cnn_stories.tgz
+f9c5f565e8abe86c38bfa4ae8f96fd72  dailymail_stories.tgz
