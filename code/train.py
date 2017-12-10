@@ -156,7 +156,7 @@ def init_stats():
 def update_stats(stats, summary_writer, start_time, step_result):
   """Update stats: write summary and accumulate statistics."""
   (_, step_loss, step_predict_count, step_summary, global_step,
-   step_word_count, batch_size, grad_norm, learning_rate, step_coverage_loss) = step_result
+   step_word_count, batch_size, grad_norm, learning_rate) = step_result
 
   # Write step summary.
   summary_writer.add_summary(step_summary, global_step)
@@ -168,7 +168,7 @@ def update_stats(stats, summary_writer, start_time, step_result):
   stats["total_count"] += float(step_word_count)
   stats["grad_norm"] += grad_norm
   stats["learning_rate"] = learning_rate
-  stats["step_coverage_loss"] = step_coverage_loss
+  # stats["step_coverage_loss"] = step_coverage_loss
 
 
   return global_step
@@ -181,16 +181,16 @@ def check_stats(stats, global_step, steps_per_stats, hps, log_f):
   avg_grad_norm = stats["grad_norm"] / steps_per_stats
   train_ppl = utils.safe_exp(
       stats["loss"] / stats["predict_count"])
-  coverage_loss =   stats["step_coverage_loss"]
+  # coverage_loss =   stats["step_coverage_loss"]
   loss =   stats["loss"]
 
 
   speed = stats["total_count"] / (1000 * stats["step_time"])
   utils.print_out(
       "  global step %d lr %g "
-      "step-time %.2fs wps %.2fK ppl %.2f cov_loss %.2f loss %.2f gN %.2f %s" %
+      "step-time %.2fs wps %.2fK ppl %.2f loss %.2f gN %.2f %s" %
       (global_step, stats["learning_rate"],
-       avg_step_time, speed, train_ppl,coverage_loss,loss, avg_grad_norm,
+       avg_step_time, speed, train_ppl,loss, avg_grad_norm,
        _get_best_results(hps)),
       log_f)
 
