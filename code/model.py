@@ -53,10 +53,10 @@ class Model(object):
          elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
              self.eval_loss = res[1]
          elif self.mode == tf.contrib.learn.ModeKeys.INFER:
-             if (len(res)>4):
-                 self.infer_logits, _, self.final_context_state, self.sample_id,_ = res
-             else:
-                 self.infer_logits, _, self.final_context_state, self.sample_id = res
+             # if (len(res)>4):
+             #     self.infer_logits, _, self.final_context_state, self.sample_id,_ = res
+             # else:
+             self.infer_logits, _, self.final_context_state, self.sample_id = res
 
              self.sample_words = reverse_target_vocab_table.lookup(
                  tf.to_int64(self.sample_id))
