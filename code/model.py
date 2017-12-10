@@ -8,6 +8,7 @@ import model_helper
 from util import misc_utils as utils
 
 
+
 class Model(object):
 
     def __init__(self, iterator, hps, mode, vocab_table,reverse_target_vocab_table=None, scope=None):
@@ -48,10 +49,18 @@ class Model(object):
              self.word_count = tf.reduce_sum(
                  self.iterator.source_sequence_length) + tf.reduce_sum(
                  self.iterator.target_sequence_length)
+             if (len(res)>4):
+                 self.coverage_loss = res[4]
+             else:
+                 self.coverage_loss=tf.constant(0)
          elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
              self.eval_loss = res[1]
          elif self.mode == tf.contrib.learn.ModeKeys.INFER:
-             self.infer_logits, _, self.final_context_state, self.sample_id = res
+             if (len(res)>4):
+                 self.infer_logits, _, self.final_context_state, self.sample_id,_ = res
+             else:
+                 self.infer_logits, _, self.final_context_state, self.sample_id = res
+
              self.sample_words = reverse_target_vocab_table.lookup(
                  tf.to_int64(self.sample_id))
 
@@ -96,9 +105,18 @@ class Model(object):
 
              # Summary
              # Summary
-             self.train_summary = tf.summary.merge([
+             if(self.coverage_loss is not None):
+                 self.train_summary = tf.summary.merge([
+                                                           tf.summary.scalar("lr", self.learning_rate),
+                                                           tf.summary.scalar("train_loss", self.train_loss),
+                                                           tf.summary.scalar("coverage_loss", self.coverage_loss)
+
+                                                       ] + grad_norm_summary)
+             else:
+                 self.train_summary = tf.summary.merge([
                                                        tf.summary.scalar("lr", self.learning_rate),
-                                                       tf.summary.scalar("train_loss", self.train_loss),
+                                                       tf.summary.scalar("train_loss", self.train_loss)
+
                                                    ] + grad_norm_summary)
          if self.mode == tf.contrib.learn.ModeKeys.INFER:
              self.infer_summary = self._get_infer_summary(hps)
@@ -112,13 +130,6 @@ class Model(object):
              utils.print_out("  %s, %s, %s" % (param.name, str(param.get_shape()),
                                                param.op.device))
 
-    # def init_embeddings(self, hps):
-    #     """Init embeddings."""
-    #
-    #     embedding = tf.get_variable('embedding', [self.hps.vocab_size, self.hps.emb_dim], dtype=tf.float32,
-    #                                     initializer=self.trunc_norm_init)
-    #
-    #     self.embedding_encoder, self.embedding_decoder =embedding,embedding
 
     def init_embeddings(self, hparams, scope):
         """Init embeddings."""
@@ -215,34 +226,6 @@ class Model(object):
 
 
 
-    def _reduce_states(self, fw_st, bw_st):
-        """Add to the graph a linear layer to reduce the encoder's final FW and BW state into a single initial state for the decoder. This is needed because the encoder is bidirectional but the decoder is not.
-
-        Args:
-          fw_st: LSTMStateTuple with hidden_dim units.
-          bw_st: LSTMStateTuple withb hidden_dim units.
-
-        Returns:
-          state: LSTMStateTuple with hidden_dim units.
-        """
-        hidden_dim = self.hps.hidden_dim
-        with tf.variable_scope('reduce_final_st'):
-            # Define weights and biases to reduce the cell and reduce the state
-            w_reduce_c = tf.get_variable('w_reduce_c', [hidden_dim * 2, hidden_dim], dtype=tf.float32,
-                                         initializer=self.trunc_norm_init)
-            w_reduce_h = tf.get_variable('w_reduce_h', [hidden_dim * 2, hidden_dim], dtype=tf.float32,
-                                         initializer=self.trunc_norm_init)
-            bias_reduce_c = tf.get_variable('bias_reduce_c', [hidden_dim], dtype=tf.float32,
-                                            initializer=self.trunc_norm_init)
-            bias_reduce_h = tf.get_variable('bias_reduce_h', [hidden_dim], dtype=tf.float32,
-                                            initializer=self.trunc_norm_init)
-
-            # Apply linear layer
-            old_c = tf.concat(axis=1, values=[fw_st.c, bw_st.c])  # Concatenation of fw and bw cell
-            old_h = tf.concat(axis=1, values=[fw_st.h, bw_st.h])  # Concatenation of fw and bw state
-            new_c = tf.nn.relu(tf.matmul(old_c, w_reduce_c) + bias_reduce_c)  # Get new cell from old cell
-            new_h = tf.nn.relu(tf.matmul(old_h, w_reduce_h) + bias_reduce_h)  # Get new state from old state
-            return tf.contrib.rnn.LSTMStateTuple(new_c, new_h)  # Return new cell and state
 
     def _build_decoder(self, encoder_outputs, encoder_state, hps):
         """Build and run a RNN decoder with a final projection layer.
@@ -411,7 +394,7 @@ class Model(object):
             utils.print_out("  decoding maximum_iterations %d" % maximum_iterations)
         else:
             # TODO(thangluong): add decoding_length_factor flag
-            decoding_length_factor = 0.2
+            decoding_length_factor = 0.3
             max_encoder_length = tf.reduce_max(source_sequence_length)
             maximum_iterations = tf.to_int32(tf.round(
                 tf.to_float(max_encoder_length) * decoding_length_factor))
@@ -540,7 +523,8 @@ class Model(object):
                          self.word_count,
                          self.batch_size,
                          self.grad_norm,
-                         self.learning_rate])
+                         self.learning_rate,
+                         self.coverage_loss])
 
     def infer(self, sess):
         assert self.mode == tf.contrib.learn.ModeKeys.INFER

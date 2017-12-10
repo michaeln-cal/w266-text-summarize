@@ -63,9 +63,9 @@ class AttentionModel(model.Model):
     attention_option = hps.attention
     attention_architecture = hps.attention_architecture
 
-    if attention_architecture != "standard":
-      raise ValueError(
-          "Unknown attention architecture %s" % attention_architecture)
+    # if attention_architecture != "standard":
+    #   raise ValueError(
+    #       "Unknown attention architecture %s" % attention_architecture)
 
     num_units = hps.num_units
     num_layers = hps.num_layers
