@@ -150,13 +150,18 @@ def run_full_eval(model_dir, infer_model, infer_sess, eval_model, eval_sess,
 def init_stats():
   """Initialize statistics that we want to keep."""
   return {"step_time": 0.0, "loss": 0.0, "predict_count": 0.0,
-          "total_count": 0.0, "grad_norm": 0.0}
+          "total_count": 0.0, "grad_norm": 0.0, "step_coverage_loss": None}
 
 
 def update_stats(stats, summary_writer, start_time, step_result):
   """Update stats: write summary and accumulate statistics."""
-  (_, step_loss, step_predict_count, step_summary, global_step,
+
+  if (len(step_result)) == 8:
+      (_, step_loss, step_predict_count, step_summary, global_step,
    step_word_count, batch_size, grad_norm, learning_rate) = step_result
+  else:
+      (_, step_loss, step_predict_count, step_summary, global_step,
+       step_word_count, batch_size, grad_norm, learning_rate, step_coverage_loss) = step_result
 
   # Write step summary.
   summary_writer.add_summary(step_summary, global_step)
@@ -168,7 +173,8 @@ def update_stats(stats, summary_writer, start_time, step_result):
   stats["total_count"] += float(step_word_count)
   stats["grad_norm"] += grad_norm
   stats["learning_rate"] = learning_rate
-  # stats["step_coverage_loss"] = step_coverage_loss
+  if (len(step_result)) == 9:
+      stats["step_coverage_loss"] = step_coverage_loss
 
 
   return global_step
@@ -181,19 +187,28 @@ def check_stats(stats, global_step, steps_per_stats, hps, log_f):
   avg_grad_norm = stats["grad_norm"] / steps_per_stats
   train_ppl = utils.safe_exp(
       stats["loss"] / stats["predict_count"])
-  # coverage_loss =   stats["step_coverage_loss"]
   loss =   stats["loss"]
 
 
   speed = stats["total_count"] / (1000 * stats["step_time"])
-  utils.print_out(
-      "  global step %d lr %g "
-      "step-time %.2fs wps %.2fK ppl %.2f loss %.2f gN %.2f %s" %
-      (global_step, stats["learning_rate"],
-       avg_step_time, speed, train_ppl,loss, avg_grad_norm,
-       _get_best_results(hps)),
-      log_f)
+  if (stats["step_coverage_loss"] is not None):
+      coverage_loss = stats["step_coverage_loss"]
 
+      utils.print_out(
+          "  global step %d lr %g "
+          "step-time %.2fs wps %.2fK ppl %.2f loss %.2f cov_loss %.2f gN %.2f %s" %
+          (global_step, stats["learning_rate"],
+           avg_step_time, speed, train_ppl, loss, coverage_loss, avg_grad_norm,
+           _get_best_results(hps)),
+          log_f)
+  else:
+      utils.print_out(
+          "  global step %d lr %g "
+          "step-time %.2fs wps %.2fK ppl %.2f loss %.2f gN %.2f %s" %
+          (global_step, stats["learning_rate"],
+           avg_step_time, speed, train_ppl, loss, avg_grad_norm,
+           _get_best_results(hps)),
+          log_f)
   # Check for overflow
   is_overflow = False
   if math.isnan(train_ppl) or math.isinf(train_ppl) or train_ppl > 1e20:
@@ -282,10 +297,10 @@ def train(hps, scope=None, target_session=""):
       os.path.join(out_dir, summary_name), train_model.graph)
 
   # First evaluation
-  run_full_eval(
-      model_dir, infer_model, infer_sess,
-      eval_model, eval_sess, hps,
-      summary_writer,sample_src_data,sample_tgt_data)
+  # run_full_eval(
+  #     model_dir, infer_model, infer_sess,
+  #     eval_model, eval_sess, hps,
+  #     summary_writer,sample_src_data,sample_tgt_data)
 
   last_stats_step = global_step
   last_eval_step = global_step
@@ -341,8 +356,8 @@ def train(hps, scope=None, target_session=""):
       last_stats_step = global_step
       is_overflow = check_stats(stats, global_step, steps_per_stats, hps,
                                 log_f)
-      if is_overflow:
-        break
+      # if is_overflow:
+      #   break
 
       # Reset statistics
       stats = init_stats()
@@ -366,6 +381,7 @@ def train(hps, scope=None, target_session=""):
           eval_model, eval_sess, model_dir, hps, summary_writer)
 
     if global_step - last_external_eval_step >= steps_per_external_eval:
+        print("step to do eval")
       last_external_eval_step = global_step
 
       # Save checkpoint

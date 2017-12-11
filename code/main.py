@@ -113,7 +113,7 @@ def add_arguments(parser):
       """)
 
   parser.add_argument(
-      "--num_train_steps", type=int, default=12000, help="Num steps to train.")
+      "--num_train_steps", type=int, default=120000, help="Num steps to train.")
   # parser.add_argument(
   #     "--vocab_size", type=int, default=50000, help="vocab size limit.")
   parser.add_argument(
@@ -179,7 +179,7 @@ def add_arguments(parser):
   # Sequence lengths
   parser.add_argument("--src_max_len", type=int, default=400,
                       help="Max length of src sequences during training.")
-  parser.add_argument("--tgt_max_len", type=int, default=145,
+  parser.add_argument("--tgt_max_len", type=int, default=100,
                       help="Max length of tgt sequences during training.")
   parser.add_argument("--src_max_len_infer", type=int, default=None,
                       help="Max length of src sequences during inference.")
@@ -194,13 +194,13 @@ def add_arguments(parser):
                       help="lstm | gru | layer_norm_lstm | nas")
   parser.add_argument("--forget_bias", type=float, default=1.0,
                       help="Forget bias for BasicLSTMCell.")
-  parser.add_argument("--dropout", type=float, default=0.2,
+  parser.add_argument("--dropout", type=float, default=0.1,
                       help="Dropout rate (not keep_prob)")
-  parser.add_argument("--max_gradient_norm", type=float, default=5.0,
+  parser.add_argument("--max_gradient_norm", type=float, default=3.0,
                       help="Clip gradients to this norm.")
   parser.add_argument("--source_reverse", type="bool", nargs="?", const=True,
                       default=False, help="Reverse source sequence.")
-  parser.add_argument("--batch_size", type=int, default=40, help="Batch size.")
+  parser.add_argument("--batch_size", type=int, default=30, help="Batch size.")
 
   parser.add_argument("--steps_per_stats", type=int, default=100,
                       help=("How many training steps to do per stats logging."
@@ -249,7 +249,7 @@ def add_arguments(parser):
   parser.add_argument("--inference_list", type=str, default=None,
                       help=("A comma-separated list of sentence indices "
                             "(0-based) to decode."))
-  parser.add_argument("--infer_batch_size", type=int, default=40,
+  parser.add_argument("--infer_batch_size", type=int, default=30,
                       help="Batch size for inference mode.")
   parser.add_argument("--inference_output_file", type=str, default=None,
                       help="Output file to store decoding results.")
@@ -500,10 +500,10 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
             trans_file,
             metric,
             hparams.subword_option)
-        if len(score)==3:
-            utils.print_out("  %s: r1-f %.1f ,r2-f %.1f ,rl-f %.1f " % (metric, score[0],score[1], score[2]))
-        else:
-            utils.print_out("  %s: %.1f" % (metric, score))
+        # if len(score)==3:
+        #     utils.print_out("  %s: r1-f %.1f ,r2-f %.1f ,rl-f %.1f " % (metric, score[0],score[1], score[2]))
+        # else:
+        utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
     hps=hparams
