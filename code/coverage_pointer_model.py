@@ -99,10 +99,15 @@ class CoveragePointerModel(model.Model):
       """
 
       with tf.variable_scope(scope or "Attention_Decoder"):
-          batch_size = hps.batch_size  # if this line fails, it's because the batch size isn't defined
+          if(self.mode==tf.contrib.learn.ModeKeys.INFER or self.mode==tf.contrib.learn.ModeKeys.EVAL):
+              batch_size = hps.infer_batch_size  # if this line fails, it's because the batch size isn't defined
+              print("eval graph, batch size used: ", batch_size)
+
+          else:
+              batch_size = hps.batch_size  # if this line fails, it's because the batch size isn't defined
+
           attn_size = encoder_states.get_shape()[
               2].value  # if this line fails, it's because the attention length isn't defined
-
           # Reshape encoder_states (need to insert a dim)
           encoder_states = tf.expand_dims(encoder_states, axis=2)  # now is shape (batch_size, attn_len, 1, attn_size)
 
@@ -154,7 +159,7 @@ class CoveragePointerModel(model.Model):
                       masked_sums = tf.reduce_sum(attn_dist, axis=1)  # shape (batch_size)
                       return attn_dist / tf.reshape(masked_sums, [-1, 1])  # re-normalize
 
-                  if use_coverage and coverage is not None:  # non-first step of coverage
+                  if coverage is not None:  # non-first step of coverage
                       # Multiply coverage vector by w_c to get coverage_features.
                       coverage_features = nn_ops.conv2d(coverage, w_c, [1, 1, 1, 1],
                                                         "SAME")  # c has shape (batch_size, attn_length, 1, attention_vec_size)
@@ -177,8 +182,7 @@ class CoveragePointerModel(model.Model):
                       # Calculate attention distribution
                       attn_dist = masked_attention(e)
 
-                      if use_coverage:  # first step of training
-                          coverage = tf.expand_dims(tf.expand_dims(attn_dist, 2), 2)  # initialize coverage
+                      coverage = tf.expand_dims(tf.expand_dims(attn_dist, 2), 2)  # initialize coverage
 
                   # Calculate the context vector from attn_dist and encoder_states
                   context_vector = math_ops.reduce_sum(
@@ -491,7 +495,6 @@ class CoveragePointerModel(model.Model):
           maximum_iterations = hps.tgt_max_len_infer
           utils.print_out("  decoding maximum_iterations %d" % maximum_iterations)
       else:
-          # TODO(thangluong): add decoding_length_factor flag
           decoding_length_factor = 0.3
           max_encoder_length = tf.reduce_max(source_sequence_length)
           maximum_iterations = tf.to_int32(tf.round(
@@ -566,7 +569,18 @@ class CoveragePointerModel(model.Model):
 
           return logits, loss, final_context_state, sample_id,coverage_loss
 
-
+  def train(self, sess):
+      assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
+      return sess.run([self.update,
+                       self.train_loss,
+                       self.predict_count,
+                       self.train_summary,
+                       self.global_step,
+                       self.word_count,
+                       self.batch_size,
+                       self.grad_norm,
+                       self.learning_rate,
+                       self.coverage_loss])
 
 
 def _coverage_loss(attn_dists, padding_mask):
