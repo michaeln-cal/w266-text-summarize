@@ -12,22 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""For training NMT models."""
+# For training basemodels
+
 from __future__ import print_function
 
 import math
 import time
 
-import inference
+import inference_base_model
 import model_helper
 import os
 import random
 import tensorflow as tf
 import data
 from attention_model import AttentionModel
-from coverage_pointer_model import CoveragePointerModel
+from attention_history_model import AttentionHistoryModel
 
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 utils.check_tensorflow_version()
 
@@ -56,7 +57,7 @@ def run_internal_eval(
   with eval_model.graph.as_default():
     loaded_eval_model, global_step = model_helper.create_or_load_model(
         eval_model.model, model_dir, eval_sess, "eval")
-  dev_src_files,dev_tgt_files=data.get_files(hps.data_dir,hps.dev_prefix)
+  dev_src_files, dev_tgt_files = data.get_files(hps.data_dir, hps.test_prefix)
   dev_eval_iterator_feed_dict = {
       eval_model.src_file_placeholder: dev_src_files,
       eval_model.tgt_file_placeholder: dev_tgt_files
@@ -91,7 +92,7 @@ def run_external_eval(infer_model, infer_sess, model_dir, hps,
   dev_src_file = hps.dev_src_file
   dev_tgt_file = hps.dev_tgt_file
   dev_infer_iterator_feed_dict = {
-      infer_model.src_placeholder: inference.load_data(dev_src_file),
+      infer_model.src_placeholder: inference_base_model.load_data(dev_src_file),
       infer_model.batch_size_placeholder: hps.infer_batch_size,
   }
   dev_scores = _external_eval(
@@ -110,7 +111,7 @@ def run_external_eval(infer_model, infer_sess, model_dir, hps,
     test_src_file = hps.test_src_file
     test_tgt_file = hps.test_tgt_file
     test_infer_iterator_feed_dict = {
-        infer_model.src_placeholder: inference.load_data(test_src_file),
+        infer_model.src_placeholder: inference_base_model.load_data(test_src_file),
         infer_model.batch_size_placeholder: hps.infer_batch_size,
     }
     test_scores = _external_eval(
@@ -189,8 +190,7 @@ def check_stats(stats, global_step, steps_per_stats, hps, log_f):
       stats["loss"] / stats["predict_count"])
   loss =   stats["loss"]
 
-
-  speed = stats["total_count"] / (1000 * stats["step_time"])
+  speed = stats["total_count"] / (5000 * stats["step_time"])
   if (stats["step_coverage_loss"] is not None):
       coverage_loss = stats["step_coverage_loss"]
 
@@ -225,14 +225,14 @@ def train(hps, scope=None, target_session=""):
   num_train_steps = hps.num_train_steps
   steps_per_stats = hps.steps_per_stats
   steps_per_external_eval = hps.steps_per_external_eval
-  steps_per_eval = 10 * steps_per_stats
+  steps_per_eval = 100 * steps_per_stats
   if not steps_per_external_eval:
     steps_per_external_eval = 5 * steps_per_eval
 
   if hps.attention_architecture == "baseline":
       model_creator= AttentionModel
   else:
-      model_creator= CoveragePointerModel
+      model_creator = AttentionHistoryModel
 
 
 
@@ -263,8 +263,8 @@ def train(hps, scope=None, target_session=""):
 
   dev_src_file = single_article_file
   dev_tgt_file = single_abstract_file
-  sample_src_data = inference.load_data(dev_src_file)
-  sample_tgt_data = inference.load_data(dev_tgt_file)
+  sample_src_data = inference_base_model.load_data(dev_src_file)
+  sample_tgt_data = inference_base_model.load_data(dev_tgt_file)
 
 
   summary_name = "train_log"
@@ -356,8 +356,8 @@ def train(hps, scope=None, target_session=""):
       last_stats_step = global_step
       is_overflow = check_stats(stats, global_step, steps_per_stats, hps,
                                 log_f)
-      # if is_overflow:
-      #   break
+      if is_overflow:
+          break
 
       # Reset statistics
       stats = init_stats()

@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.layers import core as layers_core
 import model_helper
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 
 

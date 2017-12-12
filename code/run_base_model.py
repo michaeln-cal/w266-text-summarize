@@ -1,6 +1,21 @@
+# Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
 from __future__ import print_function
 
-import inference
+import inference_base_model
 import os
 import tensorflow as tf
 import train
@@ -16,12 +31,13 @@ import sys
 import numpy as np
 import tensorflow as tf
 
-import inference
+import inference_base_model
 import train
-from util import evaluation_utils
-from util import misc_utils as utils
+from utils import evaluation_utils
+from utils import misc_utils as utils
 import vocab_utils
-# from .util import vocab_utils
+
+# from .utils import vocab_utils
 
 
 FLAGS = None
@@ -81,7 +97,7 @@ def add_arguments(parser):
       based model.\
       """)
   parser.add_argument(
-      "--pointer_gen", type="bool", nargs="?", const=True,
+      "--copy_source", type="bool", nargs="?", const=True,
       default=False,
       help="""\
       Whether to activate pointer gen model\
@@ -234,7 +250,7 @@ def add_arguments(parser):
                       help="scope to put variables under")
   parser.add_argument("--hparams_path", type=str, default=None,
                       help=("Path to standard hparams json file that overrides"
-                            "hparams values from FLAGS."))
+                            "hparams values from hps."))
   parser.add_argument("--random_seed", type=int, default=None,
                       help="Random seed (>0, set a specific seed).")
   parser.add_argument("--override_loaded_hparams", type="bool", nargs="?",
@@ -363,7 +379,7 @@ def create_hparams(flags):
       log_device_placement=flags.log_device_placement,
       random_seed=flags.random_seed,
       override_loaded_hparams=flags.override_loaded_hparams,
-      pointer_gen=flags.pointer_gen,
+      copy_source=flags.copy_source,
 
   )
 
@@ -513,7 +529,7 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
 def main(unused_argv):
   default_hparams = create_hparams(FLAGS)
   train_fn = train.train
-  inference_fn = inference.inference
+  inference_fn = inference_base_model.inference
   run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
 

@@ -24,7 +24,7 @@ import os
 import tensorflow as tf
 
 from tensorflow.python.ops import lookup_ops
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 
 UNK = "<unk>"

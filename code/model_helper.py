@@ -7,7 +7,7 @@ import collections
 import tensorflow as tf
 
 import data
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 __all__ = [
     "get_initializer", "get_device_str",
