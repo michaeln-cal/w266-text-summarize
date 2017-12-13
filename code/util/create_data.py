@@ -116,76 +116,88 @@ if __name__ == '__main__':
     target_abstract_dir = join(args.out_dir, 'abstract')
     target_vocab_dir = join(args.out_dir, 'vocab')
 
+    skip = {'abstract':False, 'article':False, 'vocab':False }
+
     print("==Running create_data: ", datetime.datetime.now())
     print("==Checking outputs:")
-    can_continue = True
+
+    for subdir, name in (target_abstract_dir, 'abstract'), (target_article_dir, 'article'), (target_vocab_dir, 'vocab'):
+        if os.path.exists(subdir):
+            print("** Warning: skipping '%s'; target directory already exists: %s" % (name, subdir))
+            skip[name]=True
+        else:
+            print("...creating '%s' output directory: %s" %  (name, subdir))
+            pathlib.Path(subdir).mkdir(parents=True, exist_ok=True)
+
+    print("skip? ", skip)
 
     print("==Checking inputs:")
     for input_file in (input_data_dir, input_vocab_file):
         found = "[ found ]" if os.path.exists(input_file) else "[missing]"
-        can_continue = can_continue and os.path.exists(input_file)
         print("\t {} \t {}".format(found, input_file))
 
-    if not can_continue:
+    if not skip['vocab'] and not os.path.exists(input_vocab_file):
+        raise ValueError('Input vocab data not found, exiting.')
+
+    if not skip['article'] and not skip['abstract'] and not os.path.exists(input_vocab_file):
         raise ValueError('Input data not found, exiting.')
 
-    for subdir in (target_abstract_dir, target_article_dir, target_vocab_dir):
-        if os.path.exists(subdir):
-            print("** error: target directory already exists: ", subdir)
-            can_continue = False
-        else:
-            print("...creating output directory: ", subdir)
-            pathlib.Path(subdir).mkdir(parents=True, exist_ok=True)
-
-    if not can_continue:
-        raise ValueError('Errors found setting up inputs/outputs, exiting.')
 
     print("==Continuing...")
-
     print("...reading from: %s" % input_data_dir)
-    print("...processing articles to : %s" % target_article_dir)
-    print("...processing abstracts to: %s" % target_abstract_dir)
 
-    for filename in os.listdir(input_data_dir):
-        if filename.startswith('val_') or filename.startswith('train_')or filename.startswith('test_') :
-            write_file(join(target_article_dir, filename), read_article_file(join(input_data_dir, filename)))
-            write_file(join(target_abstract_dir, filename), read_abstract_file(join(input_data_dir, filename)))
+    if skip['article'] and skip['abstract']:
+        print("...skipping processing articles/abstracts; directories exist: %s" % input_data_dir)
+    else:
+        if not skip['article']:
+            print("...processing articles to : %s" % target_article_dir)
 
-    print("...reading original vocab file (limit: %s): %s" % (args.vocab_max_num, input_vocab_file))
-    df=pd.read_csv(input_vocab_file, header=None, sep=" ")
-    print("...read csv: %s rows (len=%s, count=%s)" % (df.shape[0], len(df.index), df[1].count()))
+        if not skip['abstract']:
+            print("...processing abstracts to: %s" % target_abstract_dir)
 
-    #print('...dropping NA:\n%s' % df[df.isnull().any(axis=1)])
-    df.dropna(axis=0, inplace=True)
-    print("...dropped NA: rows=%s" % len(df.index))
+        for filename in os.listdir(input_data_dir):
+            if filename.startswith('val_') or filename.startswith('train_')or filename.startswith('test_') :
+                if not skip['article']:
+                    write_file(join(target_article_dir, filename), read_article_file(join(input_data_dir, filename)))
+                if not skip['abstract']:
+                    write_file(join(target_abstract_dir, filename), read_abstract_file(join(input_data_dir, filename)))
 
-    # limit vocab to alpha-numeric words
-    if not args.vocab_special:
-        pattern=r'^[-:\.,0-9]*$'
-        #print('=========dropping:\n%s=========\n' % df[~df[0].str.contains(pattern)])
-        df = df[~df[0].str.contains(pattern)]
-        print("...removed numbers: rows=%s" % len(df.index))
+    if not skip['vocab']:
+        print("...reading original vocab file (limit: %s): %s" % (args.vocab_max_num, input_vocab_file))
+        df=pd.read_csv(input_vocab_file, header=None, sep=" ")
+        print("...read csv: %s rows (len=%s, count=%s)" % (df.shape[0], len(df.index), df[1].count()))
 
-        pattern=r'^[^\w]*$'
-        df = df[~df[0].str.contains(pattern)]
-        print("...removed special: rows=%s" % len(df.index))
+        #print('...dropping NA:\n%s' % df[df.isnull().any(axis=1)])
+        df.dropna(axis=0, inplace=True)
+        print("...dropped NA: rows=%s" % len(df.index))
 
-    # limit vocab list to words appearing more than N times
-    if args.vocab_min_num:
-        #print("\n====omitting:=====\n%s\n=====\n" % df[df[1] < args.vocab_min_num])
-        df = df[df[1] >= args.vocab_min_num]
-        print("...limit to words occuring at least %s times (rows=%s)" % (args.vocab_min_num, len(df.index)))
+        # limit vocab to alpha-numeric words
+        if not args.vocab_special:
+            pattern=r'^[-:\.,0-9]*$'
+            #print('=========dropping:\n%s=========\n' % df[~df[0].str.contains(pattern)])
+            df = df[~df[0].str.contains(pattern)]
+            print("...removed numbers: rows=%s" % len(df.index))
 
-    df.drop_duplicates(inplace=True)
-    print("...dedupe: rows=%s" % len(df.index))
+            pattern=r'^[^\w]*$'
+            df = df[~df[0].str.contains(pattern)]
+            print("...removed special: rows=%s" % len(df.index))
 
-    # limit vocab list to the most frequent N words
-    if args.vocab_max_num:
-        df = df.nlargest(args.vocab_max_num, [1])
-        print("...limit to %s rows (verify: rows=%s)" % (args.vocab_max_num, len(df.index)))
+        # limit vocab list to words appearing more than N times
+        if args.vocab_min_num:
+            #print("\n====omitting:=====\n%s\n=====\n" % df[df[1] < args.vocab_min_num])
+            df = df[df[1] >= args.vocab_min_num]
+            print("...limit to words occuring at least %s times (rows=%s)" % (args.vocab_min_num, len(df.index)))
 
-    print("...writing new vocab file (rows=%s): %s/vocab" % (len(df.index), target_vocab_dir))
-    df.to_csv(join(target_vocab_dir, 'vocab'), columns=[0], index=False, header=False)
+        df.drop_duplicates(inplace=True)
+        print("...dedupe: rows=%s" % len(df.index))
+
+        # limit vocab list to the most frequent N words
+        if args.vocab_max_num:
+            df = df.nlargest(args.vocab_max_num, [1])
+            print("...limit to %s rows (verify: rows=%s)" % (args.vocab_max_num, len(df.index)))
+
+        print("...writing new vocab file (rows=%s): %s/vocab" % (len(df.index), target_vocab_dir))
+        df.to_csv(join(target_vocab_dir, 'vocab'), columns=[0], index=False, header=False)
 
     #print("=========Sample========\n%s" % df)
     print("==Done setting up data: ", datetime.datetime.now())
