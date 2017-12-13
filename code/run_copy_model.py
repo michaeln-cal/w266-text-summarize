@@ -60,8 +60,8 @@ tf.app.flags.DEFINE_float('rand_unif_init_mag', 0.02, 'magnitude for lstm cells 
 tf.app.flags.DEFINE_float('trunc_norm_init_std', 1e-4, 'std of trunc norm init, used for initializing everything else')
 tf.app.flags.DEFINE_float('max_grad_norm', 2.0, 'for gradient clipping')
 
-# copy-source or baseline model
-tf.app.flags.DEFINE_boolean('copy_source', True, 'If True, use copy-source model. If False, use baseline model.')
+# source-copy or baseline model
+tf.app.flags.DEFINE_boolean('copy_source', True, 'If True, use source-copy model. If False, use baseline model.')
 
 # Coverage hyperparameters
 tf.app.flags.DEFINE_boolean('coverage', False,

@@ -396,12 +396,12 @@ def abstract2ids(abstract_words, vocab, article_oovs):
 
 
 def outputids2words(id_list, vocab, article_oovs):
-    """Maps output ids to words, including mapping in-article OOVs from their temporary ids to the original OOV string (applicable in copy-source mode).
+    """Maps output ids to words, including mapping in-article OOVs from their temporary ids to the original OOV string (applicable in source-copy mode).
 
     Args:
       id_list: list of ids (integers)
       vocab: Vocabulary object
-      article_oovs: list of OOV words (strings) in the order corresponding to their temporary article OOV ids (that have been assigned in copy-source mode), or None (in baseline mode)
+      article_oovs: list of OOV words (strings) in the order corresponding to their temporary article OOV ids (that have been assigned in source-copy mode), or None (in baseline mode)
 
     Returns:
       words: list of words (strings)
@@ -411,7 +411,7 @@ def outputids2words(id_list, vocab, article_oovs):
         try:
             w = vocab.id2word(i)  # might be [UNK]
         except ValueError as e:  # w is OOV
-            assert article_oovs is not None, "Error: model produced a word ID that isn't in the vocabulary. This should not happen in baseline (no copy-source) mode"
+            assert article_oovs is not None, "Error: model produced a word ID that isn't in the vocabulary. This should not happen in baseline (no source-copy) mode"
             article_oov_idx = i - vocab.size()
             try:
                 w = article_oovs[article_oov_idx]
@@ -469,7 +469,7 @@ def show_abs_oovs(abstract, vocab, article_oovs):
         if vocab.word2id(w) == unk_token:  # w is oov
             if article_oovs is None:  # baseline mode
                 new_words.append("__%s__" % w)
-            else:  # copy-source mode
+            else:  # source-copy mode
                 if w in article_oovs:
                     new_words.append("__%s__" % w)
                 else:
@@ -517,7 +517,7 @@ class Example(object):
                                                                  stop_decoding)
         self.dec_len = len(self.dec_input)
 
-        # If using copy-source mode, we need to store some extra info
+        # If using source-copy mode, we need to store some extra info
         if hps.copy_source:
             # Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id; also store the in-article OOVs words themselves
             self.enc_input_extend_vocab, self.article_oovs = article2ids(article_words, vocab)
@@ -626,7 +626,7 @@ class Batch(object):
             for j in range(ex.enc_len):
                 self.enc_padding_mask[i][j] = 1
 
-        # For copy-source mode, need to store some extra info
+        # For source-copy mode, need to store some extra info
         if hps.copy_source:
             # Determine the max number of in-article OOVs in this batch
             self.max_art_oovs = max([len(ex.article_oovs) for ex in example_list])

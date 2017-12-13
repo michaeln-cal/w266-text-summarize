@@ -244,7 +244,7 @@ def linear(args, output_size, bias, bias_start=0.0, scope=None):
 
 
 class AttHistCopyModel(object):
-    """A class to represent a sequence-to-sequence model for text summarization. Supports both baseline mode, copy-source mode, and coverage"""
+    """A class to represent a sequence-to-sequence model for text summarization. Supports both baseline mode, source-copy mode, and coverage"""
 
     def __init__(self, hps, vocab):
         self._hps = hps
@@ -375,7 +375,7 @@ class AttHistCopyModel(object):
         return outputs, out_state, attn_dists, p_gens, coverage
 
     def _calc_final_dist(self, vocab_dists, attn_dists):
-        """Calculate the final distribution, for the copy-source model
+        """Calculate the final distribution, for the source-copy model
 
         Args:
           vocab_dists: The vocabulary distributions. List length max_dec_steps of (batch_size, vsize) arrays. The words are in the order they appear in the vocabulary file.
@@ -462,7 +462,7 @@ class AttHistCopyModel(object):
                 vocab_dists = [tf.nn.softmax(s) for s in
                                vocab_scores]  # The vocabulary distributions. List length max_dec_steps of (batch_size, vsize) arrays. The words are in the order they appear in the vocabulary file.
 
-            # For copy-source model, calc final distribution from copy distribution and vocabulary distribution
+            # For source-copy model, calc final distribution from copy distribution and vocabulary distribution
             if hps.copy_source:
                 final_dists = self._calc_final_dist(vocab_dists, self.attn_dists)
             else:  # final distribution is just vocabulary distribution
