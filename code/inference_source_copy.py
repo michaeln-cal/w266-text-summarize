@@ -231,9 +231,24 @@ class BeamSearchDecoder(object):
             if not os.path.exists(self._rouge_ref_dir): os.mkdir(self._rouge_ref_dir)
             self._rouge_dec_dir = os.path.join(self._decode_dir, "decoded")
             if not os.path.exists(self._rouge_dec_dir): os.mkdir(self._rouge_dec_dir)
+        if hps.rouge_eval_only:
+            if not hps.eval_path:
+                raise Exception("Must specify path to folder containing decoded files for evaluation")
+            else:
+                self._rouge_dec_dir = hps.eval_path
+                if not os.path.exists(self._rouge_dec_dir):
+                    raise Exception("Folder containing decoded files for evaluation does not exist!")
+
 
     def decode(self):
         """Decode examples until data is exhausted (if hps.single_pass) and return, or decode indefinitely, loading latest checkpoint at regular intervals"""
+        if (hps.rouge_eval_only):
+            tf.logging.info("ROUGE only mode, Starting ROUGE eval...", self._rouge_ref_dir,
+                            self._rouge_dec_dir)
+            results_dict = rouge_eval(self._rouge_ref_dir, self._rouge_dec_dir)
+            rouge_log(results_dict, self._decode_dir)
+            return
+
         t0 = time.time()
         counter = 0
         while True:
