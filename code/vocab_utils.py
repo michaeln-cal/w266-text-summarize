@@ -24,7 +24,7 @@ import os
 import tensorflow as tf
 
 from tensorflow.python.ops import lookup_ops
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 
 UNK = "<unk>"
@@ -67,6 +67,7 @@ def check_vocab(vocab_file, out_dir, check_special_token=True, sos=None,
     raise ValueError("vocab_file '%s' does not exist." % vocab_file)
 
   vocab_size = len(vocab)
+  print("vocab size is: ", vocab_size)
   return vocab_size, vocab_file
 
 

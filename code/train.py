@@ -12,22 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""For training NMT models."""
+# For training basemodels
+
 from __future__ import print_function
 
 import math
 import time
 
-import inference
+import inference_base_model
 import model_helper
 import os
 import random
 import tensorflow as tf
 import data
 from attention_model import AttentionModel
-from coverage_pointer_model import CoveragePointerModel
+from attention_history_model import AttentionHistoryModel
 
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 utils.check_tensorflow_version()
 
@@ -56,7 +57,7 @@ def run_internal_eval(
   with eval_model.graph.as_default():
     loaded_eval_model, global_step = model_helper.create_or_load_model(
         eval_model.model, model_dir, eval_sess, "eval")
-  dev_src_files,dev_tgt_files=data.get_files(hps.data_dir,hps.dev_prefix)
+  dev_src_files, dev_tgt_files = data.get_files(hps.data_dir, hps.test_prefix)
   dev_eval_iterator_feed_dict = {
       eval_model.src_file_placeholder: dev_src_files,
       eval_model.tgt_file_placeholder: dev_tgt_files
@@ -91,7 +92,7 @@ def run_external_eval(infer_model, infer_sess, model_dir, hps,
   dev_src_file = hps.dev_src_file
   dev_tgt_file = hps.dev_tgt_file
   dev_infer_iterator_feed_dict = {
-      infer_model.src_placeholder: inference.load_data(dev_src_file),
+      infer_model.src_placeholder: inference_base_model.load_data(dev_src_file),
       infer_model.batch_size_placeholder: hps.infer_batch_size,
   }
   dev_scores = _external_eval(
@@ -110,7 +111,7 @@ def run_external_eval(infer_model, infer_sess, model_dir, hps,
     test_src_file = hps.test_src_file
     test_tgt_file = hps.test_tgt_file
     test_infer_iterator_feed_dict = {
-        infer_model.src_placeholder: inference.load_data(test_src_file),
+        infer_model.src_placeholder: inference_base_model.load_data(test_src_file),
         infer_model.batch_size_placeholder: hps.infer_batch_size,
     }
     test_scores = _external_eval(
@@ -150,13 +151,18 @@ def run_full_eval(model_dir, infer_model, infer_sess, eval_model, eval_sess,
 def init_stats():
   """Initialize statistics that we want to keep."""
   return {"step_time": 0.0, "loss": 0.0, "predict_count": 0.0,
-          "total_count": 0.0, "grad_norm": 0.0}
+          "total_count": 0.0, "grad_norm": 0.0, "step_coverage_loss": None}
 
 
 def update_stats(stats, summary_writer, start_time, step_result):
   """Update stats: write summary and accumulate statistics."""
-  (_, step_loss, step_predict_count, step_summary, global_step,
-   step_word_count, batch_size, grad_norm, learning_rate, step_coverage_loss) = step_result
+
+  if (len(step_result)) == 8:
+      (_, step_loss, step_predict_count, step_summary, global_step,
+   step_word_count, batch_size, grad_norm, learning_rate) = step_result
+  else:
+      (_, step_loss, step_predict_count, step_summary, global_step,
+       step_word_count, batch_size, grad_norm, learning_rate, step_coverage_loss) = step_result
 
   # Write step summary.
   summary_writer.add_summary(step_summary, global_step)
@@ -168,7 +174,8 @@ def update_stats(stats, summary_writer, start_time, step_result):
   stats["total_count"] += float(step_word_count)
   stats["grad_norm"] += grad_norm
   stats["learning_rate"] = learning_rate
-  stats["step_coverage_loss"] = step_coverage_loss
+  if (len(step_result)) == 9:
+      stats["step_coverage_loss"] = step_coverage_loss
 
 
   return global_step
@@ -181,19 +188,27 @@ def check_stats(stats, global_step, steps_per_stats, hps, log_f):
   avg_grad_norm = stats["grad_norm"] / steps_per_stats
   train_ppl = utils.safe_exp(
       stats["loss"] / stats["predict_count"])
-  coverage_loss =   stats["step_coverage_loss"]
   loss =   stats["loss"]
 
+  speed = stats["total_count"] / (5000 * stats["step_time"])
+  if (stats["step_coverage_loss"] is not None):
+      coverage_loss = stats["step_coverage_loss"]
 
-  speed = stats["total_count"] / (1000 * stats["step_time"])
-  utils.print_out(
-      "  global step %d lr %g "
-      "step-time %.2fs wps %.2fK ppl %.2f cov_loss %.2f loss %.2f gN %.2f %s" %
-      (global_step, stats["learning_rate"],
-       avg_step_time, speed, train_ppl,coverage_loss,loss, avg_grad_norm,
-       _get_best_results(hps)),
-      log_f)
-
+      utils.print_out(
+          "  global step %d lr %g "
+          "step-time %.2fs wps %.2fK ppl %.2f loss %.2f cov_loss %.2f gN %.2f %s" %
+          (global_step, stats["learning_rate"],
+           avg_step_time, speed, train_ppl, loss, coverage_loss, avg_grad_norm,
+           _get_best_results(hps)),
+          log_f)
+  else:
+      utils.print_out(
+          "  global step %d lr %g "
+          "step-time %.2fs wps %.2fK ppl %.2f loss %.2f gN %.2f %s" %
+          (global_step, stats["learning_rate"],
+           avg_step_time, speed, train_ppl, loss, avg_grad_norm,
+           _get_best_results(hps)),
+          log_f)
   # Check for overflow
   is_overflow = False
   if math.isnan(train_ppl) or math.isinf(train_ppl) or train_ppl > 1e20:
@@ -210,14 +225,14 @@ def train(hps, scope=None, target_session=""):
   num_train_steps = hps.num_train_steps
   steps_per_stats = hps.steps_per_stats
   steps_per_external_eval = hps.steps_per_external_eval
-  steps_per_eval = 10 * steps_per_stats
+  steps_per_eval = 100 * steps_per_stats
   if not steps_per_external_eval:
     steps_per_external_eval = 5 * steps_per_eval
 
   if hps.attention_architecture == "baseline":
       model_creator= AttentionModel
   else:
-      model_creator= CoveragePointerModel
+      model_creator = AttentionHistoryModel
 
 
 
@@ -248,8 +263,8 @@ def train(hps, scope=None, target_session=""):
 
   dev_src_file = single_article_file
   dev_tgt_file = single_abstract_file
-  sample_src_data = inference.load_data(dev_src_file)
-  sample_tgt_data = inference.load_data(dev_tgt_file)
+  sample_src_data = inference_base_model.load_data(dev_src_file)
+  sample_tgt_data = inference_base_model.load_data(dev_tgt_file)
 
 
   summary_name = "train_log"
@@ -342,7 +357,7 @@ def train(hps, scope=None, target_session=""):
       is_overflow = check_stats(stats, global_step, steps_per_stats, hps,
                                 log_f)
       if is_overflow:
-        break
+          break
 
       # Reset statistics
       stats = init_stats()
@@ -362,10 +377,11 @@ def train(hps, scope=None, target_session=""):
       # Evaluate on dev/test
       run_sample_decode(infer_model, infer_sess,
                         model_dir, hps, summary_writer,sample_src_data, sample_tgt_data)
-      # dev_ppl, test_ppl = run_internal_eval(
-      #     eval_model, eval_sess, model_dir, hps, summary_writer)
+      dev_ppl, test_ppl = run_internal_eval(
+          eval_model, eval_sess, model_dir, hps, summary_writer)
 
     if global_step - last_external_eval_step >= steps_per_external_eval:
+        print("step to do eval")
       last_external_eval_step = global_step
 
       # Save checkpoint
@@ -421,7 +437,7 @@ def _format_results(name, ppl, scores, metrics):
   result_str = "%s ppl %.2f" % (name, ppl)
   if scores:
     for metric in metrics:
-      result_str += ", %s %s %.1f" % (name, metric, scores[metric])
+      result_str += ", %s %s %.1f" % (name, metric, scores[metric][2])
   return result_str
 
 
@@ -507,10 +523,10 @@ def _external_eval(model, global_step, sess, hps, iterator,
   if decode:
     for metric in hps.metrics:
       utils.add_summary(summary_writer, global_step, "%s_%s" % (label, metric),
-                        scores[metric])
+                        scores[metric][2])
       # metric: larger is better
-      if save_on_best and scores[metric] > getattr(hps, "best_" + metric):
-        setattr(hps, "best_" + metric, scores[metric])
+      if save_on_best and scores[metric][2] > getattr(hps, "best_" + metric):
+        setattr(hps, "best_" + metric, scores[metric][2])
         model.saver.save(
             sess,
             os.path.join(
