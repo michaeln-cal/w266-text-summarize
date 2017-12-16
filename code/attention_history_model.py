@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Attention-based sequence-to-sequence model with dynamic RNN support."""
+"""Attention-based sequence-to-sequence model with attention  support."""
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -24,19 +24,17 @@ from tensorflow.python.ops import nn_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.layers import core as layers_core
 
-from util import misc_utils as utils
+from utils import misc_utils as utils
 import numpy as np
 import time
 
-import model
+import base_model
 import model_helper
 
+__all__ = ["AttentionHistoryModel"]
 
 
-__all__ = ["CoveragePointerModel"]
-
-
-class CoveragePointerModel(model.Model):
+class AttentionHistoryModel(base_model.Model):
   """Sequence-to-sequence dynamic model with attention.
 
   This class implements a multi-layer recurrent neural network as encoder,
@@ -60,11 +58,7 @@ class CoveragePointerModel(model.Model):
     self.vocab_size = hps.vocab_size
     # self.global_step = tf.Variable(0, trainable=False)
 
-
-
-
-
-    super(CoveragePointerModel, self).__init__(
+    super(AttentionHistoryModel, self).__init__(
         hps=hps,
         mode=mode,
         iterator=iterator,
@@ -72,8 +66,9 @@ class CoveragePointerModel(model.Model):
         reverse_target_vocab_table=reverse_target_vocab_table,
         scope=scope)
 
-  def attention_decoder(self,hps, decoder_inputs, initial_state, encoder_states, enc_padding_mask, cell,
-                        initial_state_attention=False, pointer_gen=True, use_coverage=True, prev_coverage=None, scope=None):
+  def attention_decoder(self, hps, decoder_inputs, initial_state, encoder_states, enc_padding_mask, cell,
+                        initial_state_attention=False, copy_source=True, use_coverage=True, prev_coverage=None,
+                        scope=None):
       """
       Args:
         decoder_inputs: A list of 2D Tensors [batch_size x input_size].
@@ -82,8 +77,8 @@ class CoveragePointerModel(model.Model):
         enc_padding_mask: 2D Tensor [batch_size x attn_length] containing 1s and 0s; indicates which of the encoder locations are padding (0) or a real token (1).
         cell: rnn_cell.RNNCell defining the cell function and size.
         initial_state_attention:
-          Note that this attention decoder passes each decoder input through a linear layer with the previous step's context vector to get a modified version of the input. If initial_state_attention is False, on the first decoder step the "previous context vector" is just a zero vector. If initial_state_attention is True, we use initial_state to (re)calculate the previous step's context vector. We set this to False for train/eval mode (because we call attention_decoder once for all decoder steps) and True for decode mode (because we call attention_decoder once for each decoder step).
-        pointer_gen: boolean. If True, calculate the generation probability p_gen for each decoder step.
+          Note that this attention decoder passes each decoder input through a linear layer with the previous step's context vector to get a modified version of the input. If initial_state_attention is False, on the first decoder step the "previous context vector" is just a zero vector. If initial_state_attention is True, we use initial_state to (re)calculate the previous step's context vector. We set this to False for train/eval mode (because we call history_decoder once for all decoder steps) and True for decode mode (because we call history_decoder once for each decoder step).
+        copy_source: boolean. If True, calculate the generation probability p_gen for each decoder step.
         use_coverage: boolean. If True, use coverage mechanism.
         prev_coverage:
           If not None, a tensor with shape (batch_size, attn_length). The previous step's coverage vector. This is only not None in decode mode when using coverage.
@@ -94,15 +89,20 @@ class CoveragePointerModel(model.Model):
         state: The final state of the decoder. A tensor shape [batch_size x cell.state_size].
         attn_dists: A list containing tensors of shape (batch_size,attn_length).
           The attention distributions for each decoder step.
-        p_gens: List of length input_size, containing tensors of shape [batch_size, 1]. The values of p_gen for each decoder step. Empty list if pointer_gen=False.
+        p_gens: List of length input_size, containing tensors of shape [batch_size, 1]. The values of p_gen for each decoder step. Empty list if copy_source=False.
         coverage: Coverage vector on the last step computed. None if use_coverage=False.
       """
 
       with tf.variable_scope(scope or "Attention_Decoder"):
-          batch_size = hps.batch_size  # if this line fails, it's because the batch size isn't defined
+          if(self.mode==tf.contrib.learn.ModeKeys.INFER or self.mode==tf.contrib.learn.ModeKeys.EVAL):
+              batch_size = hps.infer_batch_size  # if this line fails, it's because the batch size isn't defined
+              print("eval graph, batch size used: ", batch_size)
+
+          else:
+              batch_size = hps.batch_size  # if this line fails, it's because the batch size isn't defined
+
           attn_size = encoder_states.get_shape()[
               2].value  # if this line fails, it's because the attention length isn't defined
-
           # Reshape encoder_states (need to insert a dim)
           encoder_states = tf.expand_dims(encoder_states, axis=2)  # now is shape (batch_size, attn_len, 1, attn_size)
 
@@ -154,7 +154,7 @@ class CoveragePointerModel(model.Model):
                       masked_sums = tf.reduce_sum(attn_dist, axis=1)  # shape (batch_size)
                       return attn_dist / tf.reshape(masked_sums, [-1, 1])  # re-normalize
 
-                  if use_coverage and coverage is not None:  # non-first step of coverage
+                  if coverage is not None:  # non-first step of coverage
                       # Multiply coverage vector by w_c to get coverage_features.
                       coverage_features = nn_ops.conv2d(coverage, w_c, [1, 1, 1, 1],
                                                         "SAME")  # c has shape (batch_size, attn_length, 1, attention_vec_size)
@@ -177,8 +177,7 @@ class CoveragePointerModel(model.Model):
                       # Calculate attention distribution
                       attn_dist = masked_attention(e)
 
-                      if use_coverage:  # first step of training
-                          coverage = tf.expand_dims(tf.expand_dims(attn_dist, 2), 2)  # initialize coverage
+                      coverage = tf.expand_dims(tf.expand_dims(attn_dist, 2), 2)  # initialize coverage
 
                   # Calculate the context vector from attn_dist and encoder_states
                   context_vector = math_ops.reduce_sum(
@@ -200,7 +199,7 @@ class CoveragePointerModel(model.Model):
               context_vector, _, coverage = attention(initial_state,
                                                       coverage)  # in decode mode, this is what updates the coverage vector
           for i, inp in enumerate(decoder_inputs):
-              tf.logging.info("Adding attention_decoder timestep %i of %i", i, len(decoder_inputs))
+              tf.logging.info("Adding history_decoder timestep %i of %i", i, len(decoder_inputs))
               if i > 0:
                   tf.get_variable_scope().reuse_variables()
 
@@ -224,7 +223,7 @@ class CoveragePointerModel(model.Model):
               attn_dists.append(attn_dist)
 
               # Calculate p_gen
-              if pointer_gen:
+              if copy_source:
                   with tf.variable_scope('calculate_pgen'):
                       p_gen = self.linear([context_vector, state.c, state.h, x], 1, True)  # Tensor shape (batch_size, 1)
                       p_gen = tf.sigmoid(p_gen)
@@ -382,11 +381,11 @@ class CoveragePointerModel(model.Model):
             if self.time_major:
              en_src_mask = tf.transpose(en_src_mask)
 
-            decoder_outputs, dec_out_state, attn_dists, p_gens, coverage = self.attention_decoder(hps,emb_dec_inputs, dec_in_state, encoder_outputs, en_src_mask, cell,
-                                                                                 initial_state_attention=False,
-                                                                                 pointer_gen=hps.pointer_gen,
-                                                                                 use_coverage=True,
-                                                                                 prev_coverage=None, scope =decoder_scope)
+            decoder_outputs, dec_out_state, attn_dists, p_gens, coverage = self.attention_decoder(hps, emb_dec_inputs, dec_in_state, encoder_outputs, en_src_mask, cell,
+                                                                                                  initial_state_attention=False,
+                                                                                                  copy_source=hps.copy_source,
+                                                                                                  use_coverage=True,
+                                                                                                  prev_coverage=None, scope =decoder_scope)
 
 
             logits = self.output_layer(tf.stack(decoder_outputs))
@@ -491,7 +490,6 @@ class CoveragePointerModel(model.Model):
           maximum_iterations = hps.tgt_max_len_infer
           utils.print_out("  decoding maximum_iterations %d" % maximum_iterations)
       else:
-          # TODO(thangluong): add decoding_length_factor flag
           decoding_length_factor = 0.3
           max_encoder_length = tf.reduce_max(source_sequence_length)
           maximum_iterations = tf.to_int32(tf.round(
@@ -566,7 +564,18 @@ class CoveragePointerModel(model.Model):
 
           return logits, loss, final_context_state, sample_id,coverage_loss
 
-
+  def train(self, sess):
+      assert self.mode == tf.contrib.learn.ModeKeys.TRAIN
+      return sess.run([self.update,
+                       self.train_loss,
+                       self.predict_count,
+                       self.train_summary,
+                       self.global_step,
+                       self.word_count,
+                       self.batch_size,
+                       self.grad_norm,
+                       self.learning_rate,
+                       self.coverage_loss])
 
 
 def _coverage_loss(attn_dists, padding_mask):

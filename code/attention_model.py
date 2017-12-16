@@ -19,13 +19,13 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-import model
+import base_model
 import model_helper
 
 __all__ = ["AttentionModel"]
 
 
-class AttentionModel(model.Model):
+class AttentionModel(base_model.Model):
   """Sequence-to-sequence dynamic model with attention.
 
   This class implements a multi-layer recurrent neural network as encoder,
@@ -117,7 +117,6 @@ class AttentionModel(model.Model):
         output_attention=hps.output_attention,
         name="attention")
 
-    # TODO(thangluong): do we need num_layers, num_gpus?
     cell = tf.contrib.rnn.DeviceWrapper(cell,
                                         model_helper.get_device_str(
                                             num_layers - 1, num_gpus))

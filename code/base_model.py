@@ -5,7 +5,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.layers import core as layers_core
 import model_helper
-from util import misc_utils as utils
+from utils import misc_utils as utils
 
 
 
@@ -49,15 +49,15 @@ class Model(object):
              self.word_count = tf.reduce_sum(
                  self.iterator.source_sequence_length) + tf.reduce_sum(
                  self.iterator.target_sequence_length)
-             if (len(res)>4):
+             if (len(res) > 4):
                  self.coverage_loss = res[4]
              else:
-                 self.coverage_loss=tf.constant(0)
+                 self.coverage_loss = tf.constant(0)
          elif self.mode == tf.contrib.learn.ModeKeys.EVAL:
              self.eval_loss = res[1]
          elif self.mode == tf.contrib.learn.ModeKeys.INFER:
-             if (len(res)>4):
-                 self.infer_logits, _, self.final_context_state, self.sample_id,_ = res
+             if (len(res) > 4):
+                 self.infer_logits, _, self.final_context_state, self.sample_id, _ = res
              else:
                  self.infer_logits, _, self.final_context_state, self.sample_id = res
 
@@ -105,7 +105,7 @@ class Model(object):
 
              # Summary
              # Summary
-             if(self.coverage_loss is not None):
+             if (self.coverage_loss is not None):
                  self.train_summary = tf.summary.merge([
                                                            tf.summary.scalar("lr", self.learning_rate),
                                                            tf.summary.scalar("train_loss", self.train_loss),
@@ -114,8 +114,8 @@ class Model(object):
                                                        ] + grad_norm_summary)
              else:
                  self.train_summary = tf.summary.merge([
-                                                       tf.summary.scalar("lr", self.learning_rate),
-                                                       tf.summary.scalar("train_loss", self.train_loss)
+                                                           tf.summary.scalar("lr", self.learning_rate),
+                                                           tf.summary.scalar("train_loss", self.train_loss)
 
                                                    ] + grad_norm_summary)
          if self.mode == tf.contrib.learn.ModeKeys.INFER:
@@ -523,8 +523,7 @@ class Model(object):
                          self.word_count,
                          self.batch_size,
                          self.grad_norm,
-                         self.learning_rate,
-                         self.coverage_loss])
+                         self.learning_rate])
 
     def infer(self, sess):
         assert self.mode == tf.contrib.learn.ModeKeys.INFER
