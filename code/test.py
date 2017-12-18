@@ -1,26 +1,16 @@
-from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-# from scipy.stats import entropy
+input_list = ['all', 'this']
 
-x = [0, 1, 1]
-y = [1, 0]
-z = [1, 0]
-print(cosine_similarity(x, y) + cosine_similarity(z, [1, 1]))
-# # print(entropy(dataSetI,dataSetII))
-#
-# # cwd = os.getcwd()
-# # print(cwd)
-# # for file in os.listdir('../'):
-# #     print(file)
-#
-# self._probability_fn = lambda score, prev: (  # pylint:disable=g-long-lambda
-#     probability_fn(
-#         _maybe_mask_score(score, memory_sequence_length, score_mask_value),
-#         prev))
 
-a = (1, 2, 4)
-if len(a) > 2:
-    print(a[2])
+def check_duplicate(input_list, n):
+    n_grams = [item for item in zip(*[input_list[i:] for i in range(n)])]
+    dup = 0
+    for i in range(len(n_grams) - 1):
+        for j in range(i + 1, len(n_grams)):
+            if n_grams[j] == n_grams[i]: dup = +1
 
-a = 5, 7, 5, 6
-len(a)
+    return dup
+
+
+print(check_duplicate(input_list, 3))

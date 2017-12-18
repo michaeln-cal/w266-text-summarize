@@ -27,7 +27,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 hps = tf.app.flags.FLAGS
 
 
-def history_decoder(decoder_inputs, initial_state, encoder_states, enc_padding_mask, cell,
+def history_decoder(decoder_inputs, initial_state, encoder_states, enc_padding_mask, dec_padding_mask, cell,
                     initial_state_attention=False, copy_source=True, use_coverage=False, prev_coverage=None):
     """
     Args:
@@ -57,7 +57,7 @@ def history_decoder(decoder_inputs, initial_state, encoder_states, enc_padding_m
             0].value  # if this line fails, it's because the batch size isn't defined
         attn_size = encoder_states.get_shape()[
             2].value  # if this line fails, it's because the attention length isn't defined
-
+        decoder_cell_size = initial_state.c.get_shape()[1].value
         # Reshape encoder_states (need to insert a dim)
         encoder_states = tf.expand_dims(encoder_states, axis=2)  # now is shape (batch_size, attn_len, 1, attn_size)
 
@@ -75,9 +75,12 @@ def history_decoder(decoder_inputs, initial_state, encoder_states, enc_padding_m
 
         # Get the weight vectors v and w_c (w_c is for coverage)
         v = variable_scope.get_variable("v", [attention_vec_size])
+        v_d = variable_scope.get_variable("v_d", [decoder_cell_size])
+
         if use_coverage:
             with variable_scope.variable_scope("coverage"):
                 w_c = variable_scope.get_variable("w_c", [1, 1, 1, attention_vec_size])
+                w_d_c = variable_scope.get_variable("w_d_c", [1, 1, 1, attention_vec_size])
 
         if prev_coverage is not None:  # for beam search mode with coverage
             # reshape from (batch_size, attn_length) to (batch_size, attn_len, 1, 1)
@@ -142,19 +145,115 @@ def history_decoder(decoder_inputs, initial_state, encoder_states, enc_padding_m
 
             return context_vector, attn_dist, coverage
 
+        def intra_decoder_attention(decoder_state, decoder_history_c, decoder_history_h):
+            """Calculate the context vector and attention distribution from the decoder state and the previous decode states
+
+
+            Args:
+              decoder_state: state of the decoder
+              decoder_history: tensor array [ (batch_size, state_size)]
+              decoder_coverage: Optional. Previous timestep's coverage vector, shape (batch_size, attn_len, 1, 1).
+
+            Returns:
+              context_vector: weighted sum of encoder_states
+              attn_dist: attention distribution
+              coverage: new coverage vector. shape (batch_size, attn_len, 1, 1)
+            """
+            with variable_scope.variable_scope("Intra_Decoder_Attention"):
+                # Pass the decoder state through a linear layer (this is W_s s_t + b_attn in the paper)
+                decoder_features = linear(decoder_state, decoder_cell_size,
+                                          True)  # shape (batch_size, attention_vec_size)
+                decoder_features = tf.expand_dims(tf.expand_dims(decoder_features, 1),
+                                                  1)  # reshape to (batch_size, 1, 1, state size)
+                # Getting the history to this point and stack the item to produce a single tensor
+                decoder_history_states_c = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+                decoder_history_states_h = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+                for i in range(len(decoder_history_c)):
+                    decoder_history_states_c.write(i, decoder_history_c[i])
+                    decoder_history_states_h.write(i, decoder_history_h[i])
+
+                decoder_history_states_c = decoder_history_states_c.stack()
+                decoder_history_states_c = tf.transpose(decoder_history_states_c, [1, 0, 2])
+                decoder_history_states_c = tf.expand_dims(decoder_history_states_c, axis=1)
+
+                decoder_history_states_h = decoder_history_states_h.stack()
+                decoder_history_states_h = tf.transpose(decoder_history_states_h, [1, 0, 2])
+                decoder_history_states_h = tf.expand_dims(decoder_history_states_h, axis=1)
+
+                W_d_h = variable_scope.get_variable("W_d_h", [1, 1, decoder_cell_size, decoder_cell_size])
+                decoder_history_features_h = nn_ops.conv2d(decoder_history_states_h, W_d_h, [1, 1, 1, 1],
+                                                           "SAME")  # shape (batch_size,t,1,state size)
+
+                W_d_c = variable_scope.get_variable("W_d_c", [1, 1, decoder_cell_size, decoder_cell_size])
+                decoder_history_features_c = nn_ops.conv2d(decoder_history_states_c, W_d_c, [1, 1, 1, 1],
+                                                           "SAME")  # shape (batch_size,t,1,state size)
+
+                def masked_d_attention(e):
+                    """Take softmax of e then apply enc_padding_mask and re-normalize"""
+                    attn_d_dist = nn_ops.softmax(e)  # take softmax. shape (batch_size, attn_length)
+                    # attn_d_dist *= dec_padding_mask  # apply mask
+                    masked_d_sums = tf.reduce_sum(attn_dist, axis=1)  # shape (batch_size)
+                    return attn_d_dist / tf.reshape(masked_d_sums, [-1, 1])  # re-normalize
+
+                # Calculate v^T tanh(W_h h_i + W_s s_t + b_attn)
+                e = math_ops.reduce_sum(
+                    v_d * math_ops.tanh(decoder_history_features_c + decoder_history_features_h + decoder_features),
+                    [2, 3])  # calculate e
+                # print("e shape", e.get_shape())
+                # print("decoder_history_states_c shape", decoder_history_states_c.get_shape())
+
+                # Calculate attention distribution
+                attn_d_dist = masked_d_attention(e)
+                # print("attention dis shape", attn_d_dist.get_shape())
+
+                # Calculate the context vector from attn_dist and encoder_states
+                context_d_vector_c = math_ops.reduce_sum(
+                    array_ops.reshape(attn_d_dist, [batch_size, -1, 1, 1]) * decoder_history_states_c,
+                    [1, 2])  # shape (batch_size, state size).
+                context_d_vector_c = array_ops.reshape(context_d_vector_c, [-1, state.c.get_shape()[1].value])
+
+                context_d_vector_h = math_ops.reduce_sum(
+                    array_ops.reshape(attn_d_dist, [batch_size, -1, 1, 1]) * decoder_history_states_h,
+                    [1, 2])  # shape (batch_size, state size).
+                context_d_vector_h = array_ops.reshape(context_d_vector_h, [-1, state.c.get_shape()[1].value])
+
+            return context_d_vector_c, context_d_vector_h
+
         outputs = []
         attn_dists = []
         p_gens = []
+        decoder_history_c = []
+        decoder_history_h = []
         state = initial_state
         coverage = prev_coverage  # initialize coverage to None or whatever was passed in
+
         context_vector = array_ops.zeros([batch_size, attn_size])
         context_vector.set_shape([None, attn_size])  # Ensure the second shape of attention vectors is set.
+
         if initial_state_attention:  # true in decode mode
             # Re-calculate the context vector from the previous step so that we can pass it through a linear layer with this step's input to get a modified version of the input
             context_vector, _, coverage = attention(initial_state,
                                                     coverage)  # in decode mode, this is what updates the coverage vector
+
         for i, inp in enumerate(decoder_inputs):
-            tf.logging.info("Adding history_decoder timestep %i of %i", i, len(decoder_inputs))
+            tf.logging.info("Adding enhanced history_decoder timestep %i of %i", i, len(decoder_inputs))
+            if i > 0:
+                if i > 1:
+                    variable_scope.get_variable_scope().reuse_variables()
+
+                context_d_vector_c, context_d_vector_h = intra_decoder_attention(state, decoder_history_c,
+                                                                                 decoder_history_h)
+                # state_combined_c = linear([state.c]+[context_d_vector_c],state.get_shape()[1].value)
+                # state_combined_h = linear([state.h]+[context_d_vector_h],state.get_shape()[1].value)
+
+                state_combined_c = state.c + context_d_vector_c
+                state_combined_h = state.h + context_d_vector_h
+
+                state = tf.contrib.rnn.LSTMStateTuple(state_combined_c, state_combined_h)
+
+            decoder_history_c.append(state.c)
+            decoder_history_h.append(state.h)
+
             if i > 0:
                 variable_scope.get_variable_scope().reuse_variables()
 
@@ -365,12 +464,14 @@ class AttHistCopyModel(object):
         prev_coverage = self.prev_coverage if hps.mode == "decode" and hps.coverage else None  # In decode mode, we run history_decoder one step at a time and so need to pass in the previous step's coverage vector each time
 
         outputs, out_state, attn_dists, p_gens, coverage = history_decoder(inputs, self._dec_in_state, self._enc_states,
-                                                                           self._enc_padding_mask, cell,
+                                                                           self._enc_padding_mask,
+                                                                           self._dec_padding_mask, cell,
                                                                            initial_state_attention=(
                                                                                    hps.mode == "decode"),
                                                                            copy_source=hps.copy_source,
                                                                            use_coverage=hps.coverage,
-                                                                           prev_coverage=prev_coverage)
+                                                                           prev_coverage=prev_coverage
+                                                                           )
 
         return outputs, out_state, attn_dists, p_gens, coverage
 

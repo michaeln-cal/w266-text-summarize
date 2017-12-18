@@ -29,6 +29,15 @@ hps = tf.app.flags.FLAGS
 SECS_UNTIL_NEW_CKPT = 60  # max number of seconds before loading new checkpoint
 
 
+def check_duplicate(input_list, n):
+    n_grams = [item for item in zip(*[input_list[i:] for i in range(n)])]
+    dup = 0
+    for i in range(len(n_grams) - 1):
+        for j in range(i + 1, len(n_grams)):
+            if n_grams[j] == n_grams[i]: dup = +1
+
+    return dup
+
 class Hypothesis(object):
     """Class to represent a hypothesis during beam search. Holds all the information needed for the hypothesis."""
 
@@ -40,7 +49,7 @@ class Hypothesis(object):
           log_probs: List, same length as tokens, of floats, giving the log probabilities of the tokens so far.
           state: Current state of the decoder, a LSTMStateTuple.
           attn_dists: List, same length as tokens, of numpy arrays with shape (attn_length). These are the attention distributions so far.
-          p_gens: List, same length as tokens, of floats, or None if not using copy-source model. The values of the generation probability so far.
+          p_gens: List, same length as tokens, of floats, or None if not using source-copy model. The values of the generation probability so far.
           coverage: Numpy array of shape (attn_length), or None if not using coverage. The current coverage vector.
         """
         self.tokens = tokens
@@ -77,7 +86,10 @@ class Hypothesis(object):
     @property
     def log_prob(self):
         # the log probability of the hypothesis so far is the sum of the log probabilities of the tokens so far
-        return sum(self.log_probs)
+        weight = 100000 * check_duplicate(self.tokens, 3) + 1
+        # Reduce the probability of any hypothesis with duplicate trigram
+
+        return sum(self.log_probs) * weight
 
     @property
     def avg_log_prob(self):
@@ -219,9 +231,24 @@ class BeamSearchDecoder(object):
             if not os.path.exists(self._rouge_ref_dir): os.mkdir(self._rouge_ref_dir)
             self._rouge_dec_dir = os.path.join(self._decode_dir, "decoded")
             if not os.path.exists(self._rouge_dec_dir): os.mkdir(self._rouge_dec_dir)
+        if hps.rouge_eval_only:
+            if not hps.eval_path:
+                raise Exception("Must specify path to folder containing decoded files for evaluation")
+            else:
+                self._rouge_dec_dir = hps.eval_path
+                if not os.path.exists(self._rouge_dec_dir):
+                    raise Exception("Folder containing decoded files for evaluation does not exist!")
+
 
     def decode(self):
         """Decode examples until data is exhausted (if hps.single_pass) and return, or decode indefinitely, loading latest checkpoint at regular intervals"""
+        if (hps.rouge_eval_only):
+            tf.logging.info("ROUGE only mode, Starting ROUGE eval...", self._rouge_ref_dir,
+                            self._rouge_dec_dir)
+            results_dict = rouge_eval(self._rouge_ref_dir, self._rouge_dec_dir)
+            rouge_log(results_dict, self._decode_dir)
+            return
+
         t0 = time.time()
         counter = 0
         while True:
@@ -307,7 +334,8 @@ class BeamSearchDecoder(object):
 
         with open(ref_file, "w") as f:
             for idx, sent in enumerate(reference_sents):
-                f.write(sent) if idx == len(reference_sents) - 1 else f.write(sent + "\n")
+                f.write(str(sent.encode('utf8'))) if idx == len(reference_sents) - 1 else f.write(
+                    str(sent.encode('utf8') + b"\n"))
         with open(decoded_file, "w") as f:
             for idx, sent in enumerate(decoded_sents):
                 f.write(sent) if idx == len(decoded_sents) - 1 else f.write(sent + "\n")
@@ -323,7 +351,7 @@ class BeamSearchDecoder(object):
           abstract: The human (correct) abstract string.
           attn_dists: List of arrays; the attention distributions.
           decoded_words: List of strings; the words of the generated summary.
-          p_gens: List of scalars; the p_gen values. If not running in copy-source mode, list of None.
+          p_gens: List of scalars; the p_gen values. If not running in source-copy mode, list of None.
         """
         article_lst = article.split()  # list of words
         decoded_lst = decoded_words  # list of decoded words

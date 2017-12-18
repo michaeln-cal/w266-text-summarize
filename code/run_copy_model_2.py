@@ -19,9 +19,9 @@ import os
 import tensorflow as tf
 import numpy as np
 from collections import namedtuple
-from data import Vocab
-from data import Batcher
-from source_copy_model import AttHistCopyModel
+from data_2 import Vocab
+from data_2 import Batcher
+from source_copy_model_2 import AttHistCopyModel
 from inference_source_copy import BeamSearchDecoder
 import utils.misc_utils as utils
 from tensorflow.python import debug as tf_debug
@@ -33,7 +33,6 @@ tf.app.flags.DEFINE_string('data_path', '',
                            'Path expression to tf.Example datafiles. Can include wildcards to access multiple datafiles.')
 tf.app.flags.DEFINE_string('vocab_path', '', 'Path expression to text vocabulary file.')
 tf.app.flags.DEFINE_string('eval_path', '', 'Path expression to decoded files for evaluation')
-
 
 # Important settings
 tf.app.flags.DEFINE_string('mode', 'train', 'must be one of train/eval/decode')
